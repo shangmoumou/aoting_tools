@@ -1,0 +1,1028 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="icon" href="./brand.ico" type="image/x-icon">
+<title>哈工澳汀 · 数据分析工具箱</title>
+<!-- PORTAL_VER 2.2 -->
+<style>
+  /* 哈工澳汀 · 数据分析工具箱
+     配色思路：机身白 + 品牌绿。
+     深色底衬托科幻感，白色描边呼应产品白色机身，
+     绿色只做点缀（标题辉光、状态、按钮），不做大面积铺绿。 */
+  :root{
+    --bg:#060d0b;        /* 墨绿近黑 */
+    --bg2:#0b1512;
+    --panel:#0e1a16;
+    --line:#1e332b;
+    --tx:#e8f2ee;        /* 偏白的浅色文字 */
+    --dim:#8aa79b;
+    --gr:#00e39a;        /* 品牌绿 */
+    --gr2:#7cf5c8;
+    --gr-d:#0a3d2c;
+    --warn:#ffb454;
+    --err:#ff6b6b;
+    --wh:#ffffff;
+  }
+  *{box-sizing:border-box}
+
+  html,body{height:100%}
+  /* 渐变科幻底：墨绿 → 深青 → 近黑，多光源叠加出"极光"层次。
+     主体仍压得很暗，保证卡片文字可读 —— 炫的是底，不是内容。 */
+  body{margin:0;
+       /* 光斑放大约 2.2 倍：原来 1100x620 只照亮顶部一小块，
+          中间大片是平的，看着像"脏了一块"而不是渐变。
+          现在三团光几乎覆盖整屏，过渡才连续。 */
+       background:
+        radial-gradient(1500px 900px at 6% -16%, rgba(0,227,154,.26), transparent 64%),
+        radial-gradient(1250px 820px at 96% 4%,  rgba(0,205,225,.18), transparent 66%),
+        radial-gradient(1150px 760px at 50% 112%, rgba(0,164,148,.20), transparent 68%),
+        radial-gradient(900px 640px at 30% 52%, rgba(18,120,110,.13), transparent 70%),
+        linear-gradient(168deg, #081714 0%, #06120f 34%, #041110 66%, #030a0c 100%);
+       background-attachment:fixed;
+       color:var(--tx);
+       font:14px/1.65 -apple-system,"Segoe UI","Microsoft YaHei",sans-serif;
+       min-height:100vh}
+
+  /* 极光飘带：两团缓慢游动的青绿色光，给静态页面一点"活的"感觉。
+     用 very low opacity + 长周期，避免干扰阅读。 */
+  body::after{content:"";position:fixed;inset:-24% -12%;pointer-events:none;z-index:0;
+    background:
+      radial-gradient(900px 620px at 20% 26%, rgba(0,227,154,.15), transparent 66%),
+      radial-gradient(820px 560px at 80% 66%, rgba(0,215,205,.12), transparent 68%);
+    filter:blur(40px);
+    animation:drift 26s ease-in-out infinite alternate}
+  @keyframes drift{
+    0%  {transform:translate3d(-3%, -2%, 0) scale(1)}
+    100%{transform:translate3d(4%, 3%, 0) scale(1.12)}
+  }
+  @media (prefers-reduced-motion:reduce){
+    body::after{animation:none}
+  }
+
+  /* 解锁对话框 */
+  .mask{position:fixed;inset:0;background:rgba(2,8,7,.72);
+    backdrop-filter:blur(6px);z-index:99;
+    display:flex;align-items:center;justify-content:center}
+  .dlg{width:320px;max-width:calc(100vw - 40px);
+    background:rgba(10,20,18,.97);
+    border:1px solid rgba(255,255,255,.16);
+    border-radius:14px;padding:20px;
+    box-shadow:0 18px 60px rgba(0,0,0,.6),0 0 0 1px rgba(0,227,154,.1)}
+  .dlg h4{margin:0 0 14px;font-size:15px;color:var(--txt);
+    padding-bottom:10px;border-bottom:1px solid rgba(255,255,255,.1)}
+  .dlg label{display:block;margin-bottom:12px;font-size:12px;
+    color:var(--dim)}
+  .dlg input{width:100%;margin-top:6px;padding:9px 11px;
+    background:rgba(0,0,0,.35);color:var(--txt);
+    border:1px solid rgba(255,255,255,.18);border-radius:8px;
+    font-size:13px;font-family:inherit;box-sizing:border-box}
+  .dlg input:focus{outline:none;border-color:var(--acc, #00e39a)}
+  .dlg .err{min-height:18px;font-size:12px;color:#ff8a7a;margin-bottom:8px}
+  .dlg .row{display:flex;gap:10px;justify-content:flex-end}
+  .dlg button{padding:8px 16px;border-radius:8px;font-size:13px;
+    cursor:pointer;font-family:inherit;border:1px solid transparent}
+  .dlg .ghost{background:transparent;border-color:rgba(255,255,255,.24);
+    color:var(--dim)}
+  .dlg .primary{background:linear-gradient(135deg,#00e39a,#00b894);
+    color:#04221a;font-weight:600}
+  .dlg .primary:disabled{opacity:.6;cursor:default}
+
+  /* 背景细网格：科幻底噪，压得很淡，不抢内容 */
+  body::before{content:"";position:fixed;inset:0;pointer-events:none;z-index:0;
+    background-image:
+      linear-gradient(rgba(0,227,154,.05) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(0,227,154,.05) 1px, transparent 1px);
+    background-size:44px 44px;
+    mask-image:radial-gradient(ellipse 104% 84% at 50% 4%, #000 52%, transparent 100%)}
+
+  .wrap{max-width:1080px;margin:0 auto;padding:30px 20px 70px;position:relative;z-index:1}
+
+  /* ── 品牌行 ── */
+  .brand{display:flex;align-items:center;gap:14px;margin-bottom:18px}
+  .brand .n{color:var(--tx);font-weight:700;font-size:22px;letter-spacing:.1em;
+            text-shadow:0 0 20px rgba(0,227,154,.28)}
+  .brand .e{color:var(--gr);opacity:.9;font-size:15px;letter-spacing:.42em;
+            font-weight:600}
+  .brand .lg{height:46px;width:auto;display:block;
+    filter:drop-shadow(0 0 10px rgba(0,255,170,.28))}
+  .brand .bar{width:44px;height:3px;border-radius:2px;
+    background:linear-gradient(90deg,var(--gr),transparent)}
+
+  header{display:flex;align-items:center;gap:12px;margin-bottom:4px}
+  h1{font-size:25px;margin:0;font-weight:600;letter-spacing:.02em;
+     text-shadow:0 0 22px rgba(0,227,154,.35)}
+  .ver{font-size:11px;color:var(--gr);border:1px solid rgba(0,227,154,.4);
+       background:rgba(0,227,154,.08);
+       padding:2px 9px;border-radius:11px;
+       font-family:ui-monospace,Consolas,monospace}
+  .sub{color:var(--dim);font-size:13px;margin-bottom:24px;min-height:20px}
+
+  /* 更新条：绿色描边 + 淡绿底 */
+  #upd{display:none;align-items:center;gap:12px;
+       background:linear-gradient(90deg, rgba(0,227,154,.12), rgba(0,227,154,.03));
+       border:1px solid rgba(0,227,154,.45);border-radius:9px;
+       padding:11px 15px;margin-bottom:20px}
+  #upd.on{display:flex}
+  #upd .t{flex:1}
+  #upd b{color:var(--gr2)}
+
+  button{background:linear-gradient(180deg,var(--gr),#00b87c);color:#04140e;
+         border:0;border-radius:7px;padding:7px 17px;cursor:pointer;
+         font-size:13px;font-weight:600;
+         box-shadow:0 0 0 1px rgba(0,227,154,.4), 0 4px 16px rgba(0,227,154,.18)}
+  button:hover{filter:brightness(1.1);box-shadow:0 0 0 1px var(--gr), 0 6px 22px rgba(0,227,154,.3)}
+  button:disabled{opacity:.45;cursor:default;filter:none}
+  button.ghost{background:transparent;color:var(--tx);
+               border:1px solid var(--line);box-shadow:none;font-weight:400}
+  button.ghost:hover{border-color:var(--gr);color:var(--gr2)}
+  button.mini{padding:5px 12px;font-size:12px}
+
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(316px,1fr));gap:15px}
+
+  /* 卡片：深色玻璃 + 白色描边（呼应白色机身），hover 变绿发光 */
+  .card{background:linear-gradient(180deg,rgba(255,255,255,.045),rgba(255,255,255,.012));
+        border:1px solid rgba(255,255,255,.16);border-radius:12px;
+        padding:17px 19px;cursor:pointer;transition:.18s;text-decoration:none;
+        color:inherit;display:block;position:relative;overflow:hidden}
+  .card::after{content:"";position:absolute;left:0;top:0;width:2px;height:100%;
+        background:linear-gradient(180deg,var(--gr),transparent);opacity:0;transition:.18s}
+  .card:hover{border-color:rgba(0,227,154,.55);transform:translateY(-3px);
+        box-shadow:0 10px 30px rgba(0,0,0,.45), 0 0 0 1px rgba(0,227,154,.25)}
+  .card:hover::after{opacity:1}
+  .card h3{margin:0 0 7px;font-size:15.5px;display:flex;align-items:center;gap:9px}
+  .card .ic{font-size:19px}
+  .card .v{font-size:11px;color:var(--gr);border:1px solid rgba(0,227,154,.35);
+           padding:0 7px;border-radius:9px;font-weight:400;margin-left:auto;
+           font-family:ui-monospace,Consolas,monospace}
+  .card p{margin:0;color:var(--dim);font-size:12.5px;line-height:1.6;min-height:42px}
+  .card .meta{margin-top:11px;font-size:11.5px;color:#6f8b7e;
+              display:flex;gap:12px;flex-wrap:wrap}
+
+  .svc{margin-top:11px;padding-top:11px;border-top:1px solid rgba(255,255,255,.1);
+       font-size:12px;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+  .dot{width:8px;height:8px;border-radius:50%;background:#5c7369;flex:none}
+  .dot.on{background:var(--gr);box-shadow:0 0 9px var(--gr);animation:pulse 1.9s infinite}
+  .dot.off{background:var(--warn);box-shadow:0 0 9px rgba(255,180,84,.6)}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.42}}
+  .svc a{color:var(--gr2);text-decoration:none}
+  .svc a:hover{text-decoration:underline}
+
+  section{margin-top:34px;border-top:1px solid rgba(255,255,255,.09);padding-top:20px}
+  section h2{font-size:13px;margin:0 0 11px;color:var(--dim);font-weight:600;
+             letter-spacing:.14em}
+  table{width:100%;border-collapse:collapse;font-size:12.5px}
+  td{padding:6px 0;border-bottom:1px solid rgba(255,255,255,.06);color:var(--dim)}
+  td:first-child{color:var(--tx);width:160px}
+  td:nth-child(2){width:80px;color:var(--gr)}
+  code{background:rgba(255,255,255,.07);padding:1px 6px;border-radius:4px;font-size:12px}
+
+  .note{margin-top:24px;background:linear-gradient(180deg,rgba(255,255,255,.05),rgba(255,255,255,.015));
+        border:1px solid rgba(255,255,255,.13);border-left:3px solid var(--gr);
+        padding:13px 17px;border-radius:0 10px 10px 0;font-size:12.5px;color:var(--dim)}
+  .note b{color:var(--tx)}
+
+  #msg{position:fixed;left:50%;bottom:28px;transform:translateX(-50%);
+       background:rgba(14,26,22,.96);border:1px solid rgba(0,227,154,.4);
+       color:var(--tx);padding:11px 22px;border-radius:9px;font-size:13px;
+       opacity:0;transition:.25s;pointer-events:none;z-index:99;
+       box-shadow:0 8px 30px rgba(0,0,0,.5)}
+  #msg.on{opacity:1}
+  #empty{color:var(--dim);font-size:13px;padding:20px 0}
+
+  @media (max-width:600px){ h1{font-size:21px} .wrap{padding:20px 14px 50px} }
+  /* 服务日志面板：连不上车时，这是能当场看见真实报错的地方 */
+  #logpanel{margin-top:18px;border:1px solid var(--line);border-radius:12px;
+           background:rgba(255,255,255,.03);overflow:hidden}
+  .lphead{display:flex;align-items:center;gap:14px;padding:10px 14px;
+          border-bottom:1px solid var(--line)}
+  .lphead b{color:var(--tx)}
+  .lpbtn{color:var(--gr);cursor:pointer;font-size:12px;opacity:.85}
+  .lpbtn:hover{opacity:1;text-decoration:underline}
+  .logbtn{margin-left:auto;color:var(--gr);font-size:12px;cursor:pointer;
+          border:1px solid rgba(0,227,154,.35);border-radius:6px;
+          padding:1px 8px}
+  .logbtn:hover{background:rgba(0,227,154,.12)}
+  #lptxt{margin:0;padding:12px 14px;max-height:320px;overflow:auto;
+         font-size:12px;line-height:1.6;color:#c9d1d9;
+         white-space:pre-wrap;word-break:break-all}
+  /* 点击反馈。
+     问题：点完卡片几乎看不出变化，用户会以为没点上、于是狂点，
+     结果一个工具被开了好几个标签页（service 型更糟：可能拉起多个
+     黑窗口、pip 跑好几遍）。
+     所以点击后立刻给一个持续 5 秒的强反馈，并在期间屏蔽重复点击。 */
+  .card.clicked{
+    border-color:var(--gr);
+    background:linear-gradient(180deg, rgba(0,227,154,.16), rgba(0,227,154,.05));
+    box-shadow:0 0 0 1px var(--gr), 0 0 26px rgba(0,227,154,.35);
+    transform:translateY(-2px)}
+  .card.clicked::before{opacity:1}
+  .card.busy{pointer-events:none;opacity:.82;cursor:progress}
+
+  /* 未解锁：红框 + 锁标，一眼看出"这个还不能用，先输口令" */
+  .card.locked{border-color:#f85149;
+    box-shadow:0 0 0 1px rgba(248,81,73,.30),0 10px 30px rgba(0,0,0,.35)}
+  .card.locked::before{content:'🔒 点击解锁';
+    position:absolute;right:12px;bottom:10px;font-size:11px;
+    color:#f85149;letter-spacing:.05em;background:none;opacity:1;
+    width:auto;height:auto;left:auto;top:auto}
+  .card.locked:hover{border-color:#ff7b72;transform:translateY(-3px)}
+  .card.locked:hover::after{opacity:0}
+  .card .hint{margin-top:8px;font-size:12px;color:var(--gr);
+              display:flex;align-items:center;gap:7px}
+  .card .hint .spin{width:11px;height:11px;flex:none;border-radius:50%;
+    border:2px solid rgba(0,227,154,.28);border-top-color:var(--gr);
+    animation:spin .8s linear infinite}
+  @keyframes spin{to{transform:rotate(360deg)}}
+
+  /* 底部云端入口 */
+  /* 放在「版本信息」下方，跟版块左对齐。
+     原来整屏居中，视觉上像页脚，跟版本信息的关系看不出来。 */
+  .cloud2{margin-top:14px;padding-top:12px;border-top:1px dashed var(--line);
+    font-size:12.5px;color:var(--dim)}
+  .cloud2 a{color:var(--gr);text-decoration:none;border-bottom:1px dotted rgba(0,227,154,.5)}
+  .cloud2 a:hover{color:#7dffcf}
+  .cloud a:hover{text-shadow:0 0 10px rgba(0,227,154,.55)}
+</style>
+</head>
+<body>
+<!-- 门户后台已退出的提示条。
+     出现场景：页面还开着（浏览器里显示着），但门户服务已经退出，
+     此时点任何需要本地服务的卡片都只会得到 failed to fetch。
+     没有这条提示，用户只能看到"启动失败"，完全想不到是门户没了。 -->
+<div id="pdead" style="display:none;background:#5a1f1f;color:#ffd7d7;
+     border:1px solid #a33;padding:10px 14px;border-radius:8px;
+     margin:12px auto;max-width:980px;font-size:13px;line-height:1.7">
+  <b>门户后台已退出</b> —— 当前页面是离线缓存，所以还能显示，但点卡片已经无法启动本地服务。<br>
+  弹出条件：页面每 4 秒发一次心跳，<b>连续 3 次都连不上</b>（约 12 秒）才判定门户没了。<br>
+  请重新双击 <b>start_aoting_tools.bat</b> 打开门户，再点卡片。
+</div>
+<div class="wrap">
+
+  <div class="brand">
+    <img class="lg" src="./brand_logo.png" alt="AOTINGBOTS"
+         onerror="this.style.display='none'">
+    <span class="n">哈工澳汀</span>
+    <span class="bar"></span>
+    <span class="e">AOTING</span>
+  </div>
+
+  <header>
+    <h1>数据分析工具箱</h1>
+    <span class="ver" id="pver">v–</span>
+  </header>
+  <div class="sub" id="mode">加载中…</div>
+
+  <div id="upd">
+    <span class="t">发现新版本 <b id="updtxt"></b></span>
+    <button id="updbtn">立即更新</button>
+    <button class="ghost" id="updno">稍后</button>
+  </div>
+
+  <div class="grid" id="grid">
+    <div id="empty">读取应用清单…</div>
+  </div>
+
+  <section>
+    <h2>版本信息</h2>
+    <table id="vtab"></table>
+    <div class="cloud2" id="cloudrow">
+      <span id="cloudlabel">若想获取最新版本，请登录：</span>
+      <a id="cloudlink" href="https://cloud.aotbot.com" target="_blank" rel="noopener">https://cloud.aotbot.com</a>
+    </div>
+  </section>
+
+  <div id="logpanel" style="display:none">
+  <div class="lphead">
+    <b id="lptitle">服务日志</b>
+    <span class="lpbtn" id="lprefresh">刷新</span>
+    <span class="lpbtn" id="lpclose">关闭</span>
+  </div>
+  <pre id="lptxt">读取中…</pre>
+</div>
+<div class="note" id="svcnote" style="display:none">
+    <b>关于远程相机实时预览</b><br>
+    <span id="svctext"></span>
+  </div>
+
+</div>
+
+<div id="msg"></div>
+
+<script>
+/* ── 全局错误兜底 ──────────────────────────────
+   为什么必须有：JS 一旦抛异常，页面会停在静态占位文字上
+   （"加载中…""读取应用清单…"），而服务端完全正常 —— 从外面看
+   像是"卡住了"，其实一行脚本都没跑。踩过一次，排查了很久。
+   这里把任何错误直接画到页面上，不再让人干瞪眼。 */
+(function(){
+  function show(tag, msg){
+    try{
+      var d = document.createElement('div');
+      d.style.cssText = 'position:fixed;left:0;right:0;top:0;z-index:9999;'
+        + 'background:#5c1a1a;color:#ffd7d7;padding:12px 18px;'
+        + 'font:13px/1.7 ui-monospace,Consolas,monospace;'
+        + 'border-bottom:2px solid #f85149;white-space:pre-wrap';
+      d.textContent = '[JS 错误] ' + tag + '\n' + msg;
+      (document.body || document.documentElement).appendChild(d);
+    }catch(e){}
+    console.error('[portal] ' + tag, msg);
+  }
+  window.addEventListener('error', function(e){
+    show(e.message || 'error',
+         (e.filename || '') + ':' + (e.lineno || '') );
+  });
+  window.addEventListener('unhandledrejection', function(e){
+    var r = e.reason;
+    show('unhandledrejection', (r && (r.stack || r.message)) || String(r));
+  });
+})();
+
+/* ── 启动日志：每一步都留痕，便于定位卡在哪 ── */
+function PLOG(m){ console.log('[portal] ' + m); }
+PLOG('脚本已执行');
+
+const $ = id => document.getElementById(id);
+let V = null;                    // version.json
+let OFFLINE_CAPABLE = false;
+const SEEN_KEY = 'toolsportal.seen.v1';
+
+function toast(t){
+  const m = $('msg');
+  m.textContent = t; m.classList.add('on');
+  clearTimeout(m._t); m._t = setTimeout(()=>m.classList.remove('on'), 2600);
+}
+
+/* ══════════ 1. 读取清单并渲染卡片 ══════════
+   卡片完全由 apps 下每个目录的 app.json 驱动，新增工具不需要改这里。
+
+   【注意】块注释里不要写含 "星号紧跟斜杠" 的路径写法，
+   那会提前关闭本注释，导致整个脚本语法错误、一行都不执行。
+   踩过一次，症状是页面永远停在"读取应用清单"。 */
+/* 带超时地取一个 JSON。
+   fetch 默认没有超时，服务端万一不返回，页面会永远停在"读取应用清单…"
+   而且没有任何报错 —— 上一版就是这样，且完全看不出原因。 */
+async function fetchJSON(path, ms){
+  let timer;
+  const ctl = new AbortController();
+  timer = setTimeout(() => ctl.abort(), ms || 8000);
+  try {
+    const r = await fetch(path, {cache:'no-store', signal: ctl.signal});
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    return await r.json();
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/* 卡住时给出可操作的出口，而不是干等 */
+function hardFail(title, detail){
+  $('mode').textContent = title;
+  $('mode').style.color = '#f85149';
+  $('grid').innerHTML =
+    '<div id="empty" style="line-height:1.9">'
+    + '<div style="color:#f85149;margin-bottom:8px">' + title + '</div>'
+    + '<div>' + detail + '</div>'
+    + '<div style="margin-top:14px">'
+    +   '<button class="mini" onclick="clearCacheAndReload()">'
+    +     '清除缓存并刷新</button> '
+    +   '<button class="mini ghost" onclick="location.reload()">'
+    +     '仅刷新</button>'
+    + '</div></div>';
+}
+
+async function clearCacheAndReload(){
+  try {
+    const keys = await caches.keys();
+    await Promise.all(keys.map(k => caches.delete(k)));
+  } catch(e){}
+  try {
+    const regs = await navigator.serviceWorker.getRegistrations();
+    await Promise.all(regs.map(r => r.unregister()));
+  } catch(e){}
+  location.reload();
+}
+
+async function loadVersion(){
+  PLOG('loadVersion 开始');
+  let j;
+  try {
+    j = await fetchJSON('./version.json', 8000);
+  } catch(e){
+    hardFail('应用清单读取失败',
+      '读不到 version.json（' + (e && e.name === 'AbortError'
+        ? '超过 8 秒无响应' : (e && e.message) || e) + '）。<br>'
+      + '请确认本页是通过 <code>start_aoting_tools.bat</code> 启动的服务打开，'
+      + '而不是直接双击 index.html。');
+    return;
+  }
+
+  // 旧版清单是 {tools:...}，新版是 {apps:...}。
+  // 结构对不上说明拿到的还是旧缓存 —— 明确说出来，别让人干瞪眼。
+  if (!j || !j.apps){
+    hardFail('清单结构不匹配',
+      '拿到的 version.json 里没有 apps 字段，说明浏览器用的是旧缓存。<br>'
+      + '点下面的「清除缓存并刷新」即可。');
+    return;
+  }
+
+  PLOG('清单读取成功，应用数=' + Object.keys(j.apps||{}).length);
+  V = j;
+    $('pver').textContent = 'v' + (j.suite || j.portal || '?');
+  try {
+    PLOG('准备渲染卡片');
+    renderCards();
+    renderTable();
+    PLOG('卡片渲染完成');
+    await compareLocal();
+  } catch(e){
+    // 渲染出错也必须显示出来。上一版这里没有 try/catch，
+    // 任何异常都会静默中断，页面就停在"读取应用清单…"。
+    hardFail('渲染卡片时出错', String(e && e.message || e));
+    console.error(e);
+  }
+}
+
+/**
+ * 卡片点击的统一入口。
+ *
+ * 做三件事（都是被真实反馈逼出来的）：
+ *   1. 立刻给出视觉反馈 —— 原来点完几乎没变化，用户以为没点上
+ *   2. 冷却期内屏蔽重复点击 —— 避免开出多个标签页 / 多个黑窗口
+ *   3. 原样保留业务处理逻辑
+ *
+ * handler 返回 Promise 时，若它先完成则【提前结束冷却】——
+ * 工具页都已经打开了，还让卡片亮着 5 秒反而是误导。
+ */
+const CARD_COOLDOWN = 5000;
+/** 卡片上的一句短提示（复用 hint 行，无转圈）。 */
+function flash(el, text){
+  if (!el) return;
+  const hint = el.querySelector('.hint');
+  const t = el.querySelector('.hint span:last-child');
+  if (!hint || !t) return;
+  t.textContent = text;
+  hint.style.display = '';
+  const sp = hint.querySelector('.spin');
+  if (sp) sp.style.display = 'none';
+  clearTimeout(el._ft);
+  el._ft = setTimeout(() => {
+    hint.style.display = 'none';
+    if (sp) sp.style.display = '';
+  }, 3200);
+}
+
+const _cardBusy = new Set();
+
+function bindCard(el, id, handler){
+  el.addEventListener('click', ev => {
+    ev.preventDefault();
+    if (_cardBusy.has(id)) return;      // 冷却中，直接忽略
+
+    _cardBusy.add(id);
+    el.classList.add('clicked', 'busy');
+
+    let done = false;
+    const finish = () => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      el.classList.remove('clicked', 'busy');
+      _cardBusy.delete(id);
+    };
+    const timer = setTimeout(finish, CARD_COOLDOWN);
+
+    try {
+      const r = handler(ev);
+      if (r && typeof r.then === 'function'){
+        r.then(finish, finish);         // 成功失败都结束，别卡住
+      }
+    } catch(e){
+      finish();
+      throw e;
+    }
+  });
+}
+
+/** 口令门禁（两段式）。
+ *
+ * 为什么要拆成两步：
+ *   原来"输对口令就直接启动"，用户还没看清就弹黑窗口了，也分不清
+ *   自己到底是解锁了还是启动了。现在第一次点击只做解锁 —— 卡片从
+ *   红框变回常态，明确"可以了"；再点一次才真正拉服务。
+ *
+ * 记在 sessionStorage：同一个浏览器会话里不用反复输，
+ * 关掉浏览器即失效，不落盘。
+ */
+const GATE_OK  = 'gateok';
+
+function gateOk(){
+  try { return sessionStorage.getItem(GATE_OK) === '1'; } catch(e){ return false; }
+}
+function gateUser(){
+  try { return sessionStorage.getItem(GATE_OK + '_u') || ''; } catch(e){ return ''; }
+}
+/** 解锁时门户签发的一次性令牌。带去本地工具服务可免二次登录；
+ *  直接双击工具目录里 start.bat 的人拿不到它，必须登录。 */
+function gateTk(){
+  try { return sessionStorage.getItem(GATE_OK + '_tk') || ''; } catch(e){ return ''; }
+}
+
+/**
+ * 账号 + 密码解锁。明文只发给本机 127.0.0.1 的门户服务，
+ * 由它去 git 拉账号库校验 —— 不让网页直连 git，是因为私有仓库要带
+ * token，token 放进网页等于公开。
+ */
+function gateDialog(title){
+  return new Promise(resolve => {
+    const box = document.createElement('div');
+    box.className = 'mask';
+    box.innerHTML =
+      '<div class="dlg">'
+      + '<h4>' + title + '</h4>'
+      + '<label>账号<input id="gu" autocomplete="off"></label>'
+      + '<label>密码<input id="gp" type="password"></label>'
+      + '<div class="err" id="gerr"></div>'
+      + '<div class="row">'
+      +   '<button class="ghost" id="gc">取消</button>'
+      +   '<button class="primary" id="gok">解锁</button>'
+      + '</div></div>';
+    document.body.appendChild(box);
+    const $ = id => box.querySelector('#' + id);
+    const close = v => { box.remove(); resolve(v); };
+    $('gc').onclick = () => close(null);
+    box.onclick = e => { if (e.target === box) close(null); };
+    const submit = async () => {
+      const u = $('gu').value.trim(), p = $('gp').value;
+      if (!u || !p){ $('gerr').textContent = '请填写账号和密码'; return; }
+      $('gok').disabled = true;
+      $('gerr').textContent = '正在校验…';
+      try {
+        const r = await fetch('/api/gate_check', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({user: u, pwd: p, wantHandoff: true})
+        });
+        const j = await r.json();
+        if (j && j.ok){
+          try {
+            sessionStorage.setItem(GATE_OK + '_tk', (j && j.tk) || '');
+          } catch(e){}
+          close({user: u});
+          return;
+        }
+        $('gerr').textContent = (j && j.err) || '校验失败';
+      } catch(e){
+        $('gerr').textContent = '无法连接本机服务：' + (e.message || e);
+      }
+      $('gok').disabled = false;
+    };
+    $('gok').onclick = submit;
+    $('gp').onkeydown = e => { if (e.key === 'Enter') submit(); };
+    $('gu').onkeydown = e => { if (e.key === 'Enter') $('gp').focus(); };
+    setTimeout(() => $('gu').focus(), 50);
+  });
+}
+
+/** 返回 true 表示"这一次点击已解锁"，调用方应直接返回、不启动。 */
+async function gateUnlock(a, el){
+  if (gateOk()) return false;
+  const r = await gateDialog('解锁「' + a.name + '」');
+  if (!r) return true;                          // 取消：只吞掉这次点击
+  try {
+    sessionStorage.setItem(GATE_OK, '1');
+    sessionStorage.setItem(GATE_OK + '_u', r.user);
+  } catch(e){}
+  if (el) el.classList.remove('locked');
+  flash(el, '已解锁，再次点击即可启动');
+  return true;
+}
+
+function renderCards(){
+  const apps = (V && V.apps) || {};
+  const g = $('grid');
+  g.innerHTML = '';
+
+  const ids = Object.keys(apps);
+  if (!ids.length){
+    g.innerHTML = '<div id="empty">apps/ 下还没有任何工具。</div>';
+    return;
+  }
+
+  ids.forEach(id => {
+    const a = apps[id];
+    const el = document.createElement('a');
+    el.className = 'card';
+    el.dataset.id = id;
+
+    if (a.type === 'service'){
+      el.href = '#';
+      el.innerHTML =
+        '<h3><span class="ic">'+a.icon+'</span>'+a.name
+        + '<span class="v">v'+a.ver+'</span></h3>'
+        + '<p>'+a.desc+'</p>'
+        + '<div class="meta">'+(a.tags||[]).map(t=>'<span>'+t+'</span>').join('')+'</div>'
+        + '<div class="svc"><span class="dot" id="dot-'+id+'"></span>'
+        + '<span id="stat-'+id+'">'
+        + (a.type === 'service' ? '点击卡片启动' : '点击打开') + '</span>'
+        + '<span class="logbtn" data-log="'+id+'">日志</span></div>'
+        + '<div class="hint" id="hint-'+id+'" style="display:none">'
+        + '<span class="spin"></span><span id="hintt-'+id+'"></span></div>';
+      // 门禁按卡片配置：只有真正会上车 SSH 操作的工具才锁。
+      // 只读看状态的（比如远程机器状态监控）不该每次都让使用者输账号密码。
+      if (a.gate !== false && !gateOk()) el.classList.add('locked');
+      bindCard(el, id, async () => {
+        // 远程相机会真的 SSH 上车，属于有风险的操作，加一道口令。
+        // 第一次点击只解锁，解锁后才走真正的启动流程。
+        // 必须 await：gateUnlock 是异步的（要联网校验），
+        // 不 await 的话拿到的是 Promise，永远为真 → 解锁后再点也启动不了。
+        if (a.gate !== false && await gateUnlock(a, el)) return;
+        return openService(a);
+      });
+    } else if (a.type === 'link'){
+      // 外链型：点开就是别人的网站，不走本地服务、不加锁、不进缓存。
+      // 跟离线页面一样直接新标签页打开，不留点击态 —— 秒开的东西
+      // 加反馈反而是噪音。
+      el.href = a.url;
+      el.target = '_blank';
+      el.rel = 'noopener noreferrer';
+      const tg = (a.tags || []).map(t => '<span>' + t + '</span>').join('');
+      el.innerHTML =
+        '<h3><span class="ic">' + a.icon + '</span>' + a.name
+        + '<span class="v">在线</span></h3>'
+        + '<p>' + a.desc + '</p>'
+        + '<div class="meta">' + tg + '<span>外部链接</span></div>';
+    } else {
+      el.href = a.entryUrl;
+      // 新标签页打开。
+      // 原因：本页靠心跳告诉服务端"我还活着"，而工具页面不会发心跳。
+      // 如果在当前页跳转，门户一卸载就被判定为"页面走了"，5 秒后服务
+      // 退出 —— 用户关掉工具页时黑窗口早没了，但中途想刷新工具页就 404。
+      // 用新标签页，门户始终在，心跳不断，关闭逻辑才准确。
+      el.target = '_blank';
+      el.rel = 'noopener';
+      // 离线页面是本地静态文件，点开就是秒开，不需要"点到了没有"的
+      // 反馈，也不需要防连点（就算连点也只是多开个标签页，无副作用）。
+      // 只有相机那种要拉服务、装依赖、走 SSH 的才需要冷却。
+      el.innerHTML =
+        '<h3><span class="ic">'+a.icon+'</span>'+a.name
+        + '<span class="v">v'+a.ver+'</span></h3>'
+        + '<p>'+a.desc+'</p>'
+        + '<div class="meta">'+(a.tags||[]).map(t=>'<span>'+t+'</span>').join('')
+        + '<span>'+(a.size/1024).toFixed(0)+' KB</span></div>';
+    }
+    g.appendChild(el);
+  });
+
+  // 点卡片会自动拉起本地服务（见 openService），
+  // 所以这里不再需要"请手动双击 start.bat"的说明。
+  // 留着反而误导：用户会以为必须先手动开，而实际点一下就行。
+}
+
+function renderTable(){
+  // 首行放总版本：用户判断要不要重新下载看的是它，不是门户自己的小版本
+  const rows = [];
+  if (V.suite) rows.push(['<b>工具箱总版本</b>', '<b>v'+V.suite+'</b>', '有更新请重新下载']);
+  rows.push(['门户', 'v'+(V.portal||'?'), '']);
+  Object.values((V && V.apps) || {}).forEach(a => {
+    // link 型没有本地文件，显示体积会变成 NaN
+    rows.push([a.name, 'v'+a.ver,
+               a.type === 'link' ? '在线服务'
+                 : (a.size/1024).toFixed(0)+' KB · '+(a.sha256||'').slice(0,7)]);
+  });
+  $('vtab').innerHTML = rows.map(r =>
+    '<tr><td>'+r[0]+'</td><td>'+r[1]+'</td><td>'+r[2]+'</td></tr>').join('');
+
+  // 云端链接改portal.json即可，不必动代码。
+  // HTML 里已写了默认值，所以清单没加载成功时仍能正常显示。
+  const cl = (V && V.config && V.config.cloud) || null;
+  if (cl && cl.url){
+    if (cl.label && $('cloudlabel')) $('cloudlabel').textContent = cl.label;
+    if ($('cloudlink')){
+      $('cloudlink').textContent = cl.url;
+      $('cloudlink').href = cl.url;
+    }
+  }
+}
+
+/* ══════════ 2. 更新检测（两种模式） ══════════
+   SW 只在 https / localhost 下能注册。内网 http+IP 访问时 SW 不可用，
+   若只依赖 SW，用户就永远收不到更新提示 —— 门户等于白做一半。
+   所以：有 SW 读缓存算 hash；没有就用 localStorage 记上次见到的 hash。 */
+async function localHash(path){
+  if (!('caches' in window)) return null;
+  try {
+    const c = await caches.open('tools-portal-v1');
+    const r = await c.match(path);
+    if (!r) return null;
+    const b = await r.arrayBuffer();
+    const h = await crypto.subtle.digest('SHA-256', b);
+    return Array.from(new Uint8Array(h))
+                .map(x=>x.toString(16).padStart(2,'0')).join('');
+  } catch(e){ return null; }
+}
+function loadSeen(){
+  try { return JSON.parse(localStorage.getItem(SEEN_KEY) || '{}'); }
+  catch(e){ return {}; }
+}
+function saveSeen(o){
+  try { localStorage.setItem(SEEN_KEY, JSON.stringify(o)); } catch(e){}
+}
+
+async function compareLocal(){
+  const apps = (V && V.apps) || {};
+  const changed = [];
+  for (const id of Object.keys(apps)){
+    const a = apps[id];
+    if (a.type !== 'page') continue;      // service 型不走缓存
+    let lh = await localHash(a.entryUrl.replace(/^\.\//, './'));
+    if (lh) OFFLINE_CAPABLE = true;
+    else lh = loadSeen()[id] || null;
+    if (lh && lh !== a.sha256) changed.push(a.name + ' v' + a.ver);
+  }
+  showMode();
+  if (changed.length){
+    $('updtxt').textContent = changed.join('、');
+    $('upd').classList.add('on');
+  }
+}
+
+function showMode(){
+  const el = $('mode');
+  if (OFFLINE_CAPABLE){
+    el.textContent = '离线可用 · 有新版本时这里会提示，点一下即可更新';
+    el.style.color = '';
+  } else if (window.isSecureContext){
+    el.textContent = '';
+  } else {
+    el.innerHTML = '在线模式 · 更新提示可用，离线不可用'
+      + '<span style="color:#6e7681">（http 访问非 localhost 地址时浏览器'
+      + '禁用 Service Worker；需要离线请用 https 或本机访问）</span>';
+    el.style.color = '#d29922';
+  }
+}
+
+$('updbtn').onclick = () => {
+  $('updbtn').disabled = true;
+  $('updbtn').textContent = '更新中…';
+  // 先记下"已更新到哪版"，否则刷新后还会提示同一个更新
+  const seen = loadSeen();
+  Object.values((V && V.apps) || {}).forEach(a => { seen[a.id] = a.sha256; });
+  saveSeen(seen);
+
+  const sw = navigator.serviceWorker;
+  if (!sw || !sw.controller){ location.reload(); return; }
+  sw.controller.postMessage({action:'update'});
+  sw.addEventListener('controllerchange', () => location.reload());
+  setTimeout(()=>location.reload(), 5000);   // 兜底
+};
+$('updno').onclick = () => $('upd').classList.remove('on');
+
+/* ══════════ 3. service 型工具：探测本地服务 ══════════ */
+async function probeOne(a){
+  const s = a.service || {};
+  const base = 'http://127.0.0.1:' + (s.port || 8765);
+  const dot = $('dot-' + a.id), st = $('stat-' + a.id);
+  if (!dot) return;
+  try {
+    const r = await fetch(base + (s.probe || '/api/version'), {cache:'no-store'});
+    const j = await r.json();
+    dot.className = 'dot on';
+    st.textContent = '本地服务已运行 v' + (j.version || '?');
+    return true;
+  } catch(e){
+    dot.className = 'dot off';
+    // 文件都在工具箱里，缺的只是"把服务跑起来"。
+    // 点卡片会自动拉起，所以这里不需要给下载链接。
+    st.textContent = '本地服务未启动（点卡片会自动启动）';
+    return false;
+  }
+}
+
+async function probeServices(){
+  const svc = Object.values((V && V.apps) || {}).filter(a => a.type === 'service');
+  for (const a of svc) await probeOne(a);
+}
+
+async function serviceAlive(a){
+  const s = a.service || {};
+  const base = 'http://127.0.0.1:' + (s.port || 8765);
+  try {
+    const r = await fetch(base + (s.probe || '/api/version'), {cache:'no-store'});
+    return !!r.ok;
+  } catch(e){ return false; }
+}
+
+/* 依赖体检：paramiko 没装时，服务照样起得来、页面照样开，
+   但一点"连接"就失败 —— 而且报错在黑窗口里，用户看不见。
+   所以这里主动问一句，把原因直接摆到页面上。 */
+async function checkDeps(a){
+  const s = a.service || {};
+  const base = 'http://127.0.0.1:' + (s.port || 8765);
+  try {
+    const r = await fetch(base + '/api/version', {cache:'no-store'});
+    const j = await r.json();
+    if (j && j.paramiko === false){
+      toast('paramiko 未安装，无法连车。请在黑窗口执行：'
+            + (j.exe ? j.exe + ' -m pip install paramiko'
+                     : 'pip install paramiko'));
+      return false;
+    }
+  } catch(e){}
+  return true;
+}
+
+async function openService(a){
+  const s = a.service || {};
+  const base = 'http://127.0.0.1:' + (s.port || 8765);
+
+  const openApp = b => {
+    // 带 tk 打开：本地服务认这个令牌就发会话 cookie，不用再登录一次。
+    const tk = gateTk();
+    window.open(b + '/' + (tk ? '?tk=' + encodeURIComponent(tk) : ''),
+                '_blank', 'noopener');
+  };
+
+  if (await serviceAlive(a)){
+    if (!await checkDeps(a)) return;
+    openApp(base);
+    return;
+  }
+
+  // 没在跑 -> 让门户后端替我们启动。
+  // 浏览器自己启动不了本地程序，但门户服务就跑在本机，可以代劳。
+  const dot = $('dot-' + a.id), st = $('stat-' + a.id);
+  let launched = false;
+  try {
+    const r = await fetch('/api/launch', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({app: a.dir || a.id, start: s.start || 'start.bat',
+                            gateUser: gateUser(), tk: gateTk()})
+    });
+    const j = await r.json();
+    launched = !!(j && j.ok);
+    if (!launched) throw new Error((j && j.err) || '启动失败');
+  } catch(e){
+    // 先分清是"门户没了"还是"启动脚本失败"，两者处理完全不同：
+    // 前者只能重开门户，后者手动双击 start.bat 就能绕过去。
+    // 不加这层判断，用户看到 failed to fetch 根本不知道该干什么。
+    let alive = false;
+    try {
+      const r = await fetch('/__portal_ping', {cache:'no-store'});
+      alive = !!r.ok;
+    } catch(_){}
+    if (!alive){
+      setPortalDead(true);
+      toast('门户后台已退出，无法启动本地服务。请重新双击 '
+            + 'start_aoting_tools.bat 再点卡片（当前页面只是离线缓存）。');
+      if (st) st.textContent = '门户已退出 · 请重开 start_aoting_tools.bat';
+      return;
+    }
+    // 后端拉不起来（比如权限策略拦了），退回手动方式并说清楚。
+    toast('自动启动失败：请手动打开 apps/' + (a.dir||'') + '/ 双击 '
+          + (s.start || 'start.bat') + '（' + (e.message||e) + '）');
+    return;
+  }
+
+  // 首次启动可能要 pip install paramiko，等久一点。
+  // 轮询而不是固定等待：装包 10 秒和 60 秒都能正确等到。
+  const LIMIT = 90;
+  if (st) st.textContent = '正在启动本地服务…';
+  if (dot) dot.className = 'dot off';
+  for (let i = 0; i < LIMIT; i++){
+    await new Promise(r => setTimeout(r, 1000));
+    if (await serviceAlive(a)){
+      if (st) st.textContent = '本地服务已启动';
+      const ok = await checkDeps(a);
+      openApp(base);
+      probeServices();
+      if (!ok && st) st.textContent = '已启动，但缺少 paramiko（无法连车）';
+      return;
+    }
+    if (st) st.textContent = '正在启动本地服务… ' + (i+1) + 's'
+      + (i >= 8 ? '（首次需装依赖，请稍候）' : '');
+    // 中途给个明确出口：黑窗口若已关闭/报错，再等下去也没意义。
+    if (i === 20 && st) st.textContent = '仍在等待… 若黑窗口已关闭，请先解决其中的报错';
+  }
+  toast('启动超时：请看黑窗口里的报错（未弹出则 Python 未加入 PATH）');
+  if (st) st.textContent = '启动失败 · 看黑窗口报错 · 点卡片可重试';
+}
+
+/* ══════════ 4. 心跳：关掉页面就关掉黑窗口 ══════════
+   门户服务（portal_server.py）靠这个决定何时退出。
+   注意：点进某个工具时，本页卸载也会发 bye；服务端留了 5 秒宽限，
+   新页面接上心跳就会取消退出，所以不会误杀。 */
+/* 心跳改成 fetch（能拿到结果）。
+   sendBeacon 是"发了就不管"，成功失败都不知道，门户悄悄退出后
+   页面毫无察觉 —— 用户只会在点卡片时碰到 failed to fetch。
+   连续 3 次不通才判定：偶尔一次抖动不该弹提示。 */
+let _deadN = 0;
+function setPortalDead(on){
+  const el = $('pdead');
+  if (el) el.style.display = on ? '' : 'none';
+}
+async function ping(){
+  try {
+    const r = await fetch('/__portal_ping', {cache:'no-store'});
+    if (r.ok){ _deadN = 0; setPortalDead(false); return; }
+  } catch(e){}
+  _deadN++;
+  if (_deadN >= 3) setPortalDead(true);
+}
+function bye(){
+  // 不做"只发一次"的限制。
+  // 原因：pagehide 在页面进入 bfcache 时也会触发（页面并没关闭）。
+  // 原来那个"只发一次"的标志如果被这种情况占用，等用户真正关闭时
+  // 就不会再发 bye —— 服务端收不到告别，黑窗口就不会关。
+  // 多发几次无害：服务端收到任何一次都会重置宽限计时。
+  try { navigator.sendBeacon('/__portal_bye', new Blob(['1'])); }
+  catch(e){
+    try { fetch('/__portal_bye', {method:'POST', keepalive:true}); } catch(_){}
+  }
+}
+
+// 只在真正离开页面时才发告别。之前 visibilitychange→hidden 也发，
+// 结果【切个标签页 / 最小化】就等于"我走了"，服务端 5 秒后真退出，
+// 切回来心跳连不上（后台标签的定时器被浏览器节流），提示条就弹出来了
+// —— 这就是"没干啥它就自己弹"的原因。真正的关闭有 pagehide 覆盖，
+// 所以 visibilitychange 这里只用来【回到前台补心跳】，不再发告别。
+window.addEventListener('pagehide', function(e){
+  if (e && e.persisted) return;   // 进 bfcache，页面没关，别杀
+  bye();
+});
+window.addEventListener('beforeunload', bye);
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') ping();   // 回前台立刻补心跳
+});
+
+// 页面重新可见时也要补心跳，避免"以为页面走了"提前退出。
+window.addEventListener('pageshow', ping);
+
+/* ══════════ 4b. 服务日志：连不上车时看这里 ══════════
+   服务自己的输出在另一个黑窗口里，用户往往注意不到。
+   它提供了 /api/logs，门户直接读过来显示 —— "为什么连不上"
+   当场就能看到，不用再来回截图问。 */
+let _logTimer = null, _logApp = null;
+
+document.addEventListener('click', e => {
+  const t = e.target;
+  if (t && t.classList && t.classList.contains('logbtn')){
+    e.preventDefault(); e.stopPropagation();
+    const a = (V && V.apps) ? V.apps[t.dataset.log] : null;
+    if (a) showSvcLog(a);
+  }
+});
+
+async function showSvcLog(a){
+  _logApp = a;
+  $('logpanel').style.display = '';
+  $('lptitle').textContent = a.name + ' 日志';
+  $('lptxt').textContent = '读取中…';
+  await loadSvcLog();
+  if (_logTimer) clearInterval(_logTimer);
+  _logTimer = setInterval(loadSvcLog, 2500);
+}
+
+async function loadSvcLog(){
+  if (!_logApp) return;
+  const s = _logApp.service || {};
+  const base = 'http://127.0.0.1:' + (s.port || 8765);
+  try {
+    const r = await fetch(base + '/api/logs?since=0', {cache:'no-store'});
+    const j = await r.json();
+    const lines = (j && j.lines) || [];
+    $('lptxt').textContent = lines.length
+      ? lines.join('\n')
+      : '（暂无日志。若服务刚启动，等几秒再点刷新）';
+  } catch(e){
+    $('lptxt').textContent = '读不到日志：本地服务未运行，或不支持该接口';
+  }
+}
+
+$('lpclose').onclick = () => {
+  $('logpanel').style.display = 'none';
+  if (_logTimer){ clearInterval(_logTimer); _logTimer = null; }
+  _logApp = null;
+};
+$('lprefresh').onclick = loadSvcLog;
+
+/* ══════════ 5. Service Worker ══════════ */
+if ('serviceWorker' in navigator){
+  navigator.serviceWorker.register('./sw.js').catch(e =>
+    console.warn('SW 注册失败（不影响使用，只是不能离线）', e));
+}
+
+loadVersion();
+/* 不再在页面打开时自动探测本地服务。
+   原因：探测会去连 127.0.0.1:8765，服务没起时每个请求都要等到超时，
+   卡片就一直停在"检测…"，看着像卡住了。
+   而实际上用户点一下卡片就会自动拉起服务，根本不需要事先检测。 */
+setInterval(probeServices, 5000);
+
+ping();
+setInterval(ping, 4000);
+</script>
+</body>
+</html>

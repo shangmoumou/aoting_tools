@@ -1,0 +1,128 @@
+{
+  "generated": "2026-10-29 20:11:42",
+  "portal": "2.2",
+  "apps": {
+    "statusweb": {
+      "id": "statusweb",
+      "dir": "statusweb",
+      "name": "远程机器状态监控",
+      "icon": "📊",
+      "desc": "SSH 实时看机器状态：CPU/内存 TOP5、任务队列、导航与定位、磁盘温度、版本与故障码、地图与实时点云、彩色相机预览（需本地服务）",
+      "type": "service",
+      "tags": [
+        "需本地服务",
+        "SSH",
+        "实时监控",
+        "任务状态"
+      ],
+      "ver": "1.53",
+      "file": "apps/statusweb/index.html",
+      "sha256": "e7de802bf24eb31f83a48d3eb825c2e834074682569502ae78936e0cf4f42008",
+      "size": 204506,
+      "entryUrl": "./apps/statusweb/index.html",
+      "service": {
+        "port": 8766,
+        "probe": "/api/version",
+        "start": "start.bat",
+        "files": [
+          "server.py",
+          "database_tools.py",
+          "database.js",
+          "stat_agent.py",
+          "cam_agent.py",
+          "start.bat",
+          "vendor/xterm/xterm.js",
+          "vendor/xterm/xterm.css",
+          "vendor/xterm/LICENSE"
+        ],
+        "note": "默认免密登录（SSH 密钥），机器需要密码时才问一次并记在本机浏览器；服务只监听 127.0.0.1，不外开端口。数据不经过任何服务器。"
+      },
+      "gate": false
+    },
+    "webbag": {
+      "id": "webbag",
+      "dir": "webbag",
+      "name": "感知导航bag分析工具",
+      "icon": "🗺️",
+      "desc": "回放 ROS bag：栅格地图、车辆轨迹、激光点云、多路相机、数值曲线、nav_msgs/Path、MarkerArray。文件拖进去就行，数据不出本机。",
+      "type": "page",
+      "tags": [
+        "纯前端",
+        "离线可用"
+      ],
+      "ver": "1.5",
+      "file": "apps/webbag/index.html",
+      "sha256": "a5916ed6170f08d98366f6812284f2c38b6507489bbcde7077b1a48dec1e7360",
+      "size": 164998,
+      "entryUrl": "./apps/webbag/index.html",
+      "gate": true
+    },
+    "imuweb": {
+      "id": "imuweb",
+      "dir": "imuweb",
+      "name": "IMU / 里程计对比分析",
+      "icon": "📈",
+      "desc": "角速度、三路 yaw 对比、odom-imu 漂移、帧间增量、话题频率诊断（含丢包识别）、IMU 零漂分析（多次静止采点看零偏稳定性）。支持选时间段分析，可跨话题自由选字段。",
+      "type": "page",
+      "tags": [
+        "纯前端",
+        "离线可用"
+      ],
+      "ver": "1.4",
+      "file": "apps/imuweb/index.html",
+      "sha256": "65a1c06bb7d318be03878bdcfb0bf7fe8a055b124dc0ce7209b03c687177ac4f",
+      "size": 169834,
+      "entryUrl": "./apps/imuweb/index.html",
+      "gate": true
+    },
+    "slamweb": {
+      "id": "slamweb",
+      "dir": "slamweb",
+      "name": "SLAM 数据分析",
+      "icon": "🧭",
+      "desc": "在线分析 SLAM 数据包：拖入 bag 即可查看轨迹、地图与定位质量。由云平台提供服务，需联网访问。",
+      "type": "link",
+      "tags": [
+        "在线工具",
+        "需联网"
+      ],
+      "ver": "1.0",
+      "url": "https://rb-admin.autoxing.com/local-bag-player"
+    }
+  },
+  "precache": [
+    "./",
+    "./index.html",
+    "./sw.js",
+    "./version.json",
+    "./brand_logo.png",
+    "./brand.ico",
+    "./brand.ico",
+    "./apps/webbag/index.html",
+    "./apps/imuweb/index.html"
+  ],
+  "config": {
+    "_comment": "门户全局配置。改这里即可，不需要动 index.html。改完跑 python3 tools/make_version.py 重新生成 version.json。",
+    "suite": {
+      "ver": "1.1.7",
+      "_note": "工具箱总版本。任何一处改动（门户/任一工具/配置）都必须升一位，这是用户判断要不要重新下载的唯一依据。"
+    },
+    "cloud": {
+      "label": "最新版本，请在云平台知识库中查看及下载，网址：",
+      "url": "https://cloud.aotbot.com"
+    },
+    "brand": {
+      "name": "哈工澳汀",
+      "en": "AOTING"
+    },
+    "portalVer": "1.1.0",
+    "gate": {
+      "_comment": "相机卡片的账号校验。账号库在 git，改密码只需改那份 gate.json，不用重发工具包。",
+      "enabled": true,
+      "api": "https://git.aotbot.com:10000/api/v4/projects/aotbot-software%2Faoting_tools%2Faoting-tools-gate/repository/files/gate.json/raw?ref=main",
+      "tokenFile": "tools/gate_token.txt",
+      "cacheDays": 3
+    }
+  },
+  "suite": "1.1.7"
+}

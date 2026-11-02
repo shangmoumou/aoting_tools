@@ -1,0 +1,16 @@
+{
+  "id": "webbag",
+  "name": "感知导航bag分析工具",
+  "ver": "1.5",
+  "icon": "🗺️",
+  "desc": "回放 ROS bag：栅格地图、车辆轨迹、激光点云、多路相机、数值曲线、nav_msgs/Path、MarkerArray。文件拖进去就行，数据不出本机。",
+  "type": "page",
+  "entry": "index.html",
+  "tags": [
+    "纯前端",
+    "离线可用"
+  ],
+  "src": "src/",
+  "build": "src/build.py",
+  "verPat": "v(\\d+\\.\\d+)"
+}

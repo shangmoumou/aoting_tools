@@ -1,0 +1,23 @@
+{
+  "_comment": "门户全局配置。改这里即可，不需要动 index.html。改完跑 python3 tools/make_version.py 重新生成 version.json。",
+  "suite": {
+    "ver": "1.1.7",
+    "_note": "工具箱总版本。任何一处改动（门户/任一工具/配置）都必须升一位，这是用户判断要不要重新下载的唯一依据。"
+  },
+  "cloud": {
+    "label": "最新版本，请在云平台知识库中查看及下载，网址：",
+    "url": "https://cloud.aotbot.com"
+  },
+  "brand": {
+    "name": "哈工澳汀",
+    "en": "AOTING"
+  },
+  "portalVer": "1.1.0",
+  "gate": {
+    "_comment": "相机卡片的账号校验。账号库在 git，改密码只需改那份 gate.json，不用重发工具包。",
+    "enabled": true,
+    "api": "https://git.aotbot.com:10000/api/v4/projects/aotbot-software%2Faoting_tools%2Faoting-tools-gate/repository/files/gate.json/raw?ref=main",
+    "tokenFile": "tools/gate_token.txt",
+    "cacheDays": 3
+  }
+}

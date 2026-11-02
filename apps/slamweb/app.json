@@ -1,0 +1,11 @@
+{
+  "id": "slamweb",
+  "name": "SLAM 数据分析",
+  "ver": "1.0",
+  "icon": "🧭",
+  "desc": "在线分析 SLAM 数据包：拖入 bag 即可查看轨迹、地图与定位质量。由云平台提供服务，需联网访问。",
+  "type": "link",
+  "url": "https://rb-admin.autoxing.com/local-bag-player",
+  "tags": ["在线工具", "需联网"],
+  "_note": "type=link：点击直接新标签页打开 url，不经本地服务、不加锁、不进离线缓存。改地址只改这里，不用动 index.html。"
+}

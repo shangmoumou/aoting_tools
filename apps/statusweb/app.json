@@ -1,0 +1,34 @@
+{
+  "id": "statusweb",
+  "name": "远程机器状态监控",
+  "ver": "1.53",
+  "icon": "📊",
+  "desc": "SSH 实时看机器状态：CPU/内存 TOP5、任务队列、导航与定位、磁盘温度、版本与故障码、地图与实时点云、彩色相机预览（需本地服务）",
+  "type": "service",
+  "entry": "index.html",
+  "tags": [
+    "需本地服务",
+    "SSH",
+    "实时监控",
+    "任务状态"
+  ],
+  "verPat": "v(\\d+\\.\\d+)",
+  "service": {
+    "port": 8766,
+    "probe": "/api/version",
+    "start": "start.bat",
+    "files": [
+      "server.py",
+      "database_tools.py",
+      "database.js",
+      "stat_agent.py",
+      "cam_agent.py",
+      "start.bat",
+      "vendor/xterm/xterm.js",
+      "vendor/xterm/xterm.css",
+      "vendor/xterm/LICENSE"
+    ],
+    "note": "默认免密登录（SSH 密钥），机器需要密码时才问一次并记在本机浏览器；服务只监听 127.0.0.1，不外开端口。数据不经过任何服务器。"
+  },
+  "gate": false
+}

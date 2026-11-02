@@ -1,0 +1,25 @@
+{
+  "id": "camweb",
+  "name": "远程相机实时预览",
+  "ver": "2.10",
+  "icon": "📷",
+  "desc": "SSH 上车取图，五路相机勾选显示、每路独立旋转。需要本地 Python 服务配合（浏览器不能自己发起 SSH）。",
+  "type": "service",
+  "entry": "index.html",
+  "tags": [
+    "需本地服务",
+    "SSH"
+  ],
+  "verPat": "v(\\d+\\.\\d+)",
+  "service": {
+    "port": 8765,
+    "probe": "/api/version",
+    "start": "start.bat",
+    "files": [
+      "server.py",
+      "cam_agent.py",
+      "start.bat"
+    ],
+    "note": "只用 SSH 密码，不落盘；服务只监听 127.0.0.1，不外开端口。画面和账号不经过任何服务器。"
+  }
+}

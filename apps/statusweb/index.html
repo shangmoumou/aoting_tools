@@ -1,0 +1,4215 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>远程机器状态监控</title>
+<link rel="stylesheet" href="vendor/xterm/xterm.css">
+<script src="vendor/xterm/xterm.js"></script>
+<style>
+  /* 浅色中性工作台：蓝色用于操作，语义色用于状态。 */
+  :root{color-scheme:light;--bg:#f4f6f8;--panel:#fff;--line:#dde3eb;--text:#202c3e;
+        --dim:#66758a;--ok:#16805d;--err:#c43545;--acc:#2563eb;--warn:#a56508;
+        --mag:#536bc4;--grid:transparent}
+  *{box-sizing:border-box}
+  body{margin:0;color:var(--text);
+       font:13px/1.6 system-ui,"Segoe UI",sans-serif;
+       background:var(--bg);
+       background-image:
+         linear-gradient(var(--grid) 1px,transparent 1px),
+         linear-gradient(90deg,var(--grid) 1px,transparent 1px);
+       background-size:34px 34px,34px 34px;
+       background-attachment:fixed}
+  /* 顶部一道青色光晕，纯装饰 */
+  body::before{content:"";position:fixed;inset:0 0 auto 0;height:180px;
+       background:radial-gradient(ellipse at 50% -40px,rgba(0,230,255,.16),transparent 70%);
+       pointer-events:none;z-index:0}
+  header,main{position:relative;z-index:1}
+  header{padding:10px 16px;border-bottom:1px solid var(--line);
+         display:flex;align-items:center;gap:10px;flex-wrap:wrap;
+         background:linear-gradient(180deg,rgba(0,230,255,.07),transparent)}
+  h1{font-size:15px;margin:0;font-weight:600;letter-spacing:1px;
+     color:#eafcff;text-shadow:0 0 12px rgba(0,230,255,.55)}
+  .ver{color:var(--acc);font-size:11px;border:1px solid var(--line);
+       border-radius:3px;padding:0 5px;background:rgba(0,230,255,.07)}
+  #st{margin-left:auto;font-size:12px}
+  main{padding:12px 16px;display:grid;grid-template-columns:1fr;gap:12px;align-items:start;
+       max-width:1780px;margin:0 auto}
+  /* 连接配置横排：滚到下面时左边不再留一大片空白 */
+  /* 原来每个输入框写死 width（170/110/90px），一行只占掉一半，
+     右边一大片空白。改成按比例弹性填充：主机最宽，端口/用户窄。 */
+  .connbar .fields{display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end}
+  .connbar .fields > div{display:flex;flex-direction:column;gap:3px;
+    flex:1 1 0;min-width:92px}
+  .connbar .fields > div.f-host{flex:3.2 1 0}
+  .connbar .fields > div.f-port{flex:1.1 1 0}
+  .connbar .fields > div.f-user{flex:1 1 0}
+  .connbar .fields > div.f-pwd{flex:2 1 0}
+  .connbar .fields input{width:100%!important;box-sizing:border-box}
+  .connbar label{margin:0;font-size:10.5px}
+  .connbar input{padding:4px 7px;font-size:12px}
+  .connbar .acts{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-top:8px}
+  /* 频率档位吃掉剩余空间，整行铺满而不是挤在左边 */
+  .connbar .acts .hzfill{flex:1 1 210px;display:flex;align-items:center;
+    gap:6px;justify-content:flex-end;flex-wrap:wrap}
+  /* 已保存机器：下拉吃掉主要宽度，按钮跟在后面，整行铺满 */
+  .connbar .profbar{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-top:8px}
+  .connbar .profbar select{flex:1 1 240px;min-width:170px;padding:4px 7px;font-size:12px}
+  .connbar .profbar .pnote{flex:1 1 200px;display:flex;align-items:center;
+    justify-content:flex-end;gap:6px;font-size:10.5px;flex-wrap:wrap}
+  /* 左侧留黑边的是卡片外框，不是卡片本身：铺满整行 */
+  #pc3dbox > .card{width:100%}
+  /* 条目数量不定的块（故障等）单独占满一行，并按条数限高滚动 */
+  .full{grid-column:1 / -1}
+  .flist{max-height:340px;overflow-y:auto}
+  /* 车辆状态合并卡：左列放任务（含队列），右列从上到下依次
+     导航 → 定位 → 硬件 → 版本，顺序固定，读起来是一条线。 */
+  .vehgrid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);
+           gap:10px;align-items:start}
+  .vehcol{display:flex;flex-direction:column;gap:10px}
+  /* 合并卡内部的各块不再独立成卡 —— 去掉边框背景，只留小标题 */
+  #veh > .vehgrid > div > .card,
+  #veh > .vehgrid > .vehcol > div > .card{background:transparent;border:none;
+        box-shadow:none;padding:0;margin:0}
+  #veh > .vehgrid > div > .card > h2,
+  #veh > .vehgrid > .vehcol > div > .card > h2{margin-bottom:6px}
+  /* 磁盘：独占整行，内容全部展开（目录多少条就显示多少条，不内部滚动） */
+  #disk{grid-column:1 / -1}
+  /* 地图 / 深度点云：居中并拉满整行宽度 */
+  #map{grid-column:1 / -1;justify-self:center;width:100%}
+  #pc3dbox{grid-column:1 / -1;justify-self:center;width:100%}
+  /* 彩色相机：居中拉满，与地图 / 深度点云保持一致 */
+  #rgbbox{grid-column:1 / -1;justify-self:center;width:100%}
+  #rgbbox > .card{width:100%}
+  #rgbbox > .card > .card{width:100%}
+  /* 多路画面网格：勾选几路就几列，窄屏自动回落 */
+  .rgbgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));
+           gap:8px}
+  .rgbcell{position:relative;background:#05070c;border:1px solid #1b2b3a;
+           border-radius:6px;overflow:hidden}
+  .rgbcell canvas{display:block;width:100%;height:auto}
+  .rgbcell .tag{position:absolute;left:6px;top:5px;font-size:11px;
+           color:#7ee787;background:rgba(0,0,0,.5);padding:1px 6px;
+           border-radius:4px}
+  /* 调试工具：强制单列竖排。
+     原因：这一组全是输入型卡片（话题名输入框、终端命令行），两列并排会把
+     输入框压得很窄，命令一长就看不全。改成单列后从上到下依次是
+     自定义话题 → 车机终端 → 日志，符合「填一个、看一个」的操作顺序。 */
+  #dbg{grid-template-columns:minmax(0,1fr)}
+  #dbg > .card{justify-self:center;width:100%}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:12px;
+        box-shadow:0 0 0 1px rgba(0,230,255,.05),0 6px 22px rgba(0,0,0,.5);
+        backdrop-filter:blur(2px)}
+  .card h2{font-size:12px;margin:0 0 10px;color:var(--acc);font-weight:600;letter-spacing:1.2px;
+           text-transform:uppercase;text-shadow:0 0 8px rgba(0,230,255,.35)}
+  .card h2::before{content:"▍ "}
+  /* 超时全屏告警：内层红框呼吸闪烁 + 顶部横幅。
+     用 pointer-events:none，不挡住「延长」按钮 —— 告警的目的就是让人
+     去点那个按钮，挡住就本末倒置了。 */
+  @keyframes alertPulse{0%,100%{opacity:.25}50%{opacity:.85}}
+  #alertv{display:none;position:fixed;inset:0;z-index:9998;pointer-events:none;
+          box-shadow:inset 0 0 0 5px #ff3b3b, inset 0 0 60px rgba(255,59,59,.35);
+          animation:alertPulse .75s ease-in-out infinite}
+  #alertv.on{display:block}
+  /* 告警框整体放大一倍：原来 13px 的小横幅，盯着数据的人基本看不见。
+     pointer-events 必须是 auto —— 点它等价于点「延长」，
+     否则还得滚到页面最上面去找那个按钮，告警就白提醒了。 */
+  #alertb{display:none;position:fixed;left:50%;top:18px;transform:translateX(-50%);
+          z-index:9999;pointer-events:auto;cursor:pointer;background:#ff3b3b;color:#fff;
+          font-weight:700;font-size:26px;padding:18px 36px;border-radius:12px;
+          letter-spacing:1px;box-shadow:0 0 40px rgba(255,59,59,.85);
+          text-align:center;line-height:1.35;white-space:nowrap}
+  #alertb:hover{filter:brightness(1.12)}
+  #alertb small{display:block;font-size:13px;font-weight:400;opacity:.9;margin-top:4px}
+  #alertb.on{display:block}
+  .grp{margin-top:12px;border-left:2px solid var(--line);padding-left:10px}
+  .grphead{font-size:12px;color:var(--acc);font-weight:600;letter-spacing:1.2px;
+           margin:0 0 8px;opacity:.95}
+  /* 紧凑化：宽屏下组内卡片两列排布，窄屏自动回落单列。
+     原来全部竖排，一屏看不到几块，要反复往下翻。
+     align-items:start 很重要 —— 否则矮卡片会被拉高去对齐高卡片。 */
+  /* 列数固定为 2，不随视口宽度变化。
+     为什么不用 auto-fit / @media：浏览器缩放会改变 CSS 像素视口宽度，
+     一放大就触发重排，卡片位置全变，盯着看的时候很干扰。
+     固定列数后缩放只是整体放大缩小，排版不动。 */
+  .g2{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));
+      gap:10px;align-items:start}
+  .g2 > .grphead,.grp.g2 > .grphead{grid-column:1 / -1;margin-bottom:0}
+  /* 网格项内部的卡片不再需要外边距，间距由 gap 统一给 */
+  .g2 > div{margin-top:0 !important}
+  .diag{font-size:11px;line-height:1.7;background:rgba(255,120,60,.07);
+        border:1px solid rgba(255,120,60,.35);border-radius:4px;padding:6px 8px;margin-top:6px}
+  .diag b{color:#ffb27a}
+  label{display:block;font-size:11.5px;color:var(--dim);margin:8px 0 3px}
+  input{width:100%;padding:6px 8px;background:rgba(0,0,0,.45);border:1px solid var(--line);
+        border-radius:4px;color:var(--text);font-size:12.5px;font-family:inherit}
+  /* 复选框必须单独拉出来。
+     根因：上面 input{width:100%} 是给文本框用的，但复选框也是 input，
+     于是每个复选框都被撑成整行宽，紧跟其后的文字被挤到下一行；
+     来源标签又带 overflow:hidden + nowrap，文字就直接看不见了。
+     之前几处是靠内联 style="width:auto" 逐个绕过，这里从根上修掉。 */
+  input[type=checkbox]{width:auto;min-width:14px;height:14px;margin:0 5px 0 0;
+        padding:0;vertical-align:-2px;flex:0 0 auto;
+        accent-color:var(--acc);cursor:pointer}
+  input:focus{outline:none;border-color:var(--acc);box-shadow:0 0 0 2px rgba(0,230,255,.18)}
+  input:disabled{opacity:.6}
+  button{padding:7px 12px;border-radius:5px;color:#04121a;font-size:12.5px;
+         cursor:pointer;font-family:inherit;font-weight:600;
+         background:linear-gradient(180deg,var(--acc),#00a6c0);border:1px solid var(--acc);
+         box-shadow:0 0 10px rgba(0,230,255,.35)}
+  button:hover{filter:brightness(1.15)}
+  button.sec{background:rgba(0,230,255,.07);border-color:var(--line);color:var(--text);
+             font-weight:400;box-shadow:none}
+  button.sec:hover{background:rgba(0,230,255,.16);border-color:var(--acc)}
+  button:disabled{opacity:.5;cursor:not-allowed}
+  .row{display:flex;gap:8px;margin-top:12px}
+  .row>*{flex:1}
+  #msg{margin-top:10px;font-size:11.5px;white-space:pre-wrap;word-break:break-all;min-height:18px}
+  .ok{color:var(--ok)}.err{color:var(--err)}.dim{color:var(--dim)}.warn{color:var(--warn)}
+
+  /* ── 概览 ── */
+  #sum{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:10px}
+  .kv{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:10px 12px}
+  .kv .k{font-size:11px;color:var(--dim)}
+  .kv .v{font-size:20px;font-weight:600;font-variant-numeric:tabular-nums;margin-top:2px}
+  .kv .s{font-size:11px;color:var(--dim);font-variant-numeric:tabular-nums}
+  .bar{height:4px;background:rgba(255,255,255,.07);border-radius:2px;margin-top:6px;overflow:hidden}
+  .bar>i{display:block;height:100%;width:0;transition:width .3s;
+         background:linear-gradient(90deg,var(--acc),var(--ok));
+         box-shadow:0 0 8px rgba(0,230,255,.6)}
+  .bar>i.hi{background:var(--warn)}.bar>i.crit{background:var(--err)}
+
+  /* ── 表格 ── */
+  #tables{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:14px}
+  /* 行高钉死：TOP5 每秒刷新，行高一变整页就跟着抖一下，非常影响读数 */
+  #tables tbody tr{height:38px}
+  #tables tbody tr.ph td{opacity:.45}
+  table{width:100%;border-collapse:collapse;font-size:12px}
+  /* 列宽钉死：pid 从 4 位变 5 位、或数值从 9 变 10 时，自动布局会重算
+     列宽，整行内容横向挪一下。固定三列宽度后横向也不再抖。 */
+  #tables table{table-layout:fixed}
+  #tables td.nm div{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  th{text-align:left;font-size:11px;color:var(--dim);font-weight:600;
+     padding:4px 6px;border-bottom:1px solid var(--line)}
+  td{padding:4px 6px;border-bottom:1px solid rgba(29,43,77,.7);font-variant-numeric:tabular-nums}
+  td.nm{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:11.5px;
+        max-width:190px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  td.nm div{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  td.nm .hl{color:#eaf6ff;font-weight:600}
+  /* 数值列：数值一行 + 进度条一行，两块都是块级、宽度按比例。
+     进度条不再用 inline-block 跟数值挤在同一行（会折行导致行高跳）。 */
+  td.num{text-align:right;width:62px;white-space:nowrap}
+  td.num .numv{line-height:1.25}
+  td.num .barm{height:4px;border-radius:2px;margin-top:3px;overflow:hidden;
+      background:rgba(255,255,255,.07)}
+  td.num .barm i{display:block;height:100%;border-radius:2px;
+      background:linear-gradient(90deg,var(--mag),var(--acc));
+      box-shadow:0 0 8px rgba(255,43,214,.5)}
+  .mb{display:inline-block;height:4px;border-radius:2px;vertical-align:middle;margin-left:6px;
+      background:linear-gradient(90deg,var(--mag),var(--acc));
+      box-shadow:0 0 8px rgba(255,43,214,.5)}
+  #log{margin-top:14px;height:170px;overflow:auto;background:rgba(0,0,0,.5);
+       border:1px solid var(--line);border-radius:6px;padding:8px;
+       font-family:ui-monospace,Menlo,Consolas,monospace;font-size:11px;
+       white-space:pre-wrap;color:var(--dim)}
+  .empty{padding:20px;text-align:center;color:var(--dim);font-size:12px}
+  /* ── 车机终端 ── */
+  #tmout{overflow:hidden;white-space:normal;word-break:normal;text-shadow:none}
+  #tmout .xterm-viewport{overflow-y:auto}
+  /* 数据库页按字段分组，长文件状态和窄屏输入框自动换行。 */
+  #dbsources{display:grid!important;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:10px}
+  #dbsources label{display:flex;align-items:flex-start;gap:6px;overflow-wrap:anywhere}
+  #dbsources input{flex:0 0 auto;margin-top:4px}
+  #carddb .db-fields label{display:flex;flex-direction:column;gap:5px;min-width:120px;max-width:100%}
+  #carddb .db-fields input,#carddb .db-fields select{width:100%;min-width:0}
+  #carddb,#dbdata{min-width:0;max-width:100%}
+  #dbdata th{text-align:left;padding:8px 10px;background:var(--bg);white-space:normal;overflow-wrap:anywhere;position:sticky;top:0;z-index:1}
+  #dbdata td{padding:8px 10px;border-top:1px solid var(--line);white-space:pre-wrap;overflow-wrap:anywhere;vertical-align:top}
+  #dbdata summary{cursor:pointer;white-space:normal;overflow-wrap:anywhere}
+  #dbdata pre{margin:8px 0 0;max-height:260px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;font:inherit}
+  /* ── 地图 ── */
+  #mapimg{display:block;width:100%;max-height:720px;object-fit:contain;
+          margin:0 auto;
+       background:#02040c;border:1px solid var(--line);border-radius:4px;
+       image-rendering:auto}
+  /* ── 故障信息 ── */
+  #faults{margin-top:14px}
+  .fh{display:flex;align-items:center;gap:8px;margin-bottom:8px}
+  .fh .lv{font-size:11px;padding:1px 7px;border-radius:10px;font-weight:600}
+  .lv.l3{background:#5c1a1a;color:#ff9b9b}
+  .lv.l2{background:#5c3d12;color:#ffcf8b}
+  .lv.l1{background:#4a4520;color:#e8dd8b}
+  .lv.l0{background:rgba(255,255,255,.07);color:var(--dim)}
+  .flist{display:flex;flex-direction:column;gap:6px}
+  .fitem{display:grid;grid-template-columns:52px 1fr auto;gap:10px;align-items:center;
+         padding:7px 9px;background:rgba(0,0,0,.42);border:1px solid var(--line);
+         border-left:3px solid var(--line);border-radius:4px}
+  .fitem.l3{border-left-color:var(--err)}
+  .fitem.l2{border-left-color:var(--warn)}
+  .fitem.l1{border-left-color:#e8dd8b}
+  .fcode{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;
+         color:var(--acc);font-weight:600}
+  .fdata{font-size:12.5px;word-break:break-all}
+  .fmeta{font-size:11px;color:var(--dim);text-align:right;white-space:nowrap}
+  /* ── 硬件状态 ── */
+  #hw{margin-top:14px}
+  .hwgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(128px,1fr));gap:8px}
+  .hwcell{padding:8px 10px;background:rgba(0,0,0,.42);border:1px solid var(--line);
+          border-radius:5px}
+  .hwk{font-size:10.5px;color:var(--dim);margin-bottom:3px}
+  .hwv{font-size:15px;font-weight:600;
+       font-family:ui-monospace,Menlo,Consolas,monospace}
+  .hwu{font-size:10.5px;color:var(--dim);font-weight:400;margin-left:3px}
+  /* 任务队列：竖排一行一个，当前任务整行高亮 */
+  /* 队列条数不定（0 ~ 几十条）：固定高度，内部滚动，
+     1 条和 20 条占用的外部空间一致，不会把下面的内容顶走 */
+  .qlist{margin-top:4px;border:1px solid var(--line);border-radius:5px;
+         max-height:190px;overflow-y:auto}
+  .qrow{display:flex;align-items:center;gap:8px;padding:6px 10px;
+        background:rgba(0,0,0,.42);border-bottom:1px solid var(--line);font-size:12.5px}
+  .qrow:last-child{border-bottom:0}
+  .qon{background:rgba(43,255,176,.10);box-shadow:inset 3px 0 0 var(--ok)}
+  .qidx{width:18px;color:var(--dim);font-size:11px;text-align:right}
+  .qnm{flex:1;font-weight:600;
+       font-family:ui-monospace,Menlo,Consolas,monospace}
+  .qtag{font-size:10px;padding:1px 6px;border-radius:8px;
+        background:var(--ok,#3ddc97);color:#06231a;font-weight:700}
+  .good{color:#7ee787}
+  .bad{color:#ff9b9b}
+  .warnc{color:#ffcf8b}
+  .cool{color:#79c0ff}
+  .mag{color:var(--mag)}
+
+  /* ── 版本栏：版本号很长，格子必须比普通硬件格宽一倍，
+         并且允许换行 —— 截掉尾巴比换行更糟（看着像版本号不全） ── */
+  .vergrid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}
+  .vergrid .hwcell{padding:10px 14px}
+  /* 版本号字符串长（V3.2.11 / 55_V4_03_07_P2.6），加粗后跟标签区分更明显 */
+  .vergrid .hwv{font-size:14px;font-weight:700;letter-spacing:.2px;
+    word-break:break-all;white-space:normal;line-height:1.4}
+  .vergrid .hwk{font-size:11px}
+
+  /* ── 导航：期望 vs 实际 并排 ── */
+  .navpair{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+  .navbox{padding:8px 10px;background:rgba(0,0,0,.42);border:1px solid var(--line);
+          border-radius:5px}
+  .navbox .nbk{font-size:10.5px;color:var(--dim);margin-bottom:6px}
+  .navbig{font-size:19px;font-weight:600;font-family:ui-monospace,Menlo,Consolas,monospace;
+          font-variant-numeric:tabular-nums}
+  .stall{margin-top:8px;padding:7px 10px;border-radius:5px;font-size:12px;
+         background:rgba(255,59,107,.12);border:1px solid var(--err);color:#ffb3c6;
+         box-shadow:0 0 12px rgba(255,59,107,.25)}
+
+  /* ── 磁盘 ── */
+  .diskbar{height:8px;border-radius:4px;margin:6px 0 10px;overflow:hidden;
+           background:rgba(255,255,255,.07)}
+  .diskbar>i{display:block;height:100%;border-radius:4px;
+             background:linear-gradient(90deg,var(--acc),var(--mag));
+             box-shadow:0 0 10px rgba(255,43,214,.45)}
+  .durow{display:flex;align-items:center;gap:8px;padding:5px 10px;font-size:12px;
+         background:rgba(0,0,0,.35);border-bottom:1px solid rgba(29,43,77,.7)}
+  .durow:last-child{border-bottom:0}
+  .dunm{flex:1;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:11.5px}
+  .dusz{font-variant-numeric:tabular-nums;font-weight:600;color:var(--acc)}
+
+  /* ── 自定义话题 ── */
+  .ctrow{display:flex;align-items:center;gap:8px;padding:6px 10px;font-size:12px;
+         background:rgba(0,0,0,.35);border-bottom:1px solid rgba(29,43,77,.7)}
+  .ctrow:last-child{border-bottom:0}
+  .ctnm{flex:1;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:11.5px;
+        word-break:break-all}
+  .cttag{font-size:10px;padding:1px 6px;border-radius:8px;font-weight:700}
+  .cttag.on{background:var(--ok);color:#04121a}
+  .cttag.off{background:rgba(255,255,255,.1);color:var(--dim)}
+  .ctclose{border:0;background:transparent;color:var(--dim);cursor:pointer;
+           font-size:14px;padding:0 4px;box-shadow:none;font-weight:400}
+  .ctclose:hover{color:var(--err);filter:none}
+  .jsonbox{margin-top:6px;max-height:320px;overflow:auto;padding:8px;
+           background:rgba(0,0,0,.55);border:1px solid var(--line);border-radius:5px;
+           font-family:ui-monospace,Menlo,Consolas,monospace;font-size:11px;
+           white-space:pre-wrap;word-break:break-all;color:#bfe9ff}
+  .ctype{font-size:10.5px;color:var(--dim);font-family:ui-monospace,Menlo,Consolas,monospace}
+  /* 侧栏工作区覆盖旧布局规则，原功能节点与渲染入口保持不变。 */
+  [hidden]{display:none!important}
+  body{background:var(--bg);background-image:none}
+  body::before{display:none}
+  header{position:sticky;top:0;z-index:20;min-height:76px;margin-left:220px;
+    padding:14px 28px;background:#fff;gap:12px}
+  h1{color:var(--text);text-shadow:none;letter-spacing:0;font-size:17px}
+  .ver{background:#f0f4fa;color:var(--dim);border:0}
+  .sidebar{position:fixed;inset:0 auto 0 0;width:220px;background:#fff;
+    border-right:1px solid var(--line);padding:26px 16px;z-index:30;display:flex;flex-direction:column}
+  .brand{font-weight:750;font-size:20px;letter-spacing:.5px;padding:0 12px;color:#1d3761}
+  .brand small{display:block;font-size:11px;color:var(--dim);font-weight:400;letter-spacing:0;margin-top:4px}
+  .nav-label{color:var(--dim);font-size:11px;margin:34px 12px 10px}
+  .sidebar nav{display:flex;flex-direction:column;gap:5px}
+  .sidebar button{display:flex;align-items:center;gap:12px;width:100%;text-align:left;
+    padding:12px;border:0;background:transparent;color:#536179;font-weight:500;box-shadow:none}
+  .sidebar button.active{color:#225bd1;background:#edf3ff;font-weight:650}
+  .nav-index{font-size:10px;font-variant-numeric:tabular-nums;opacity:.65}
+  .sidebar-foot{margin-top:auto;padding:18px 12px 0;border-top:1px solid var(--line);font-size:11px;color:var(--dim)}
+  .header-title{margin-right:auto}
+  .header-title small{display:block;color:var(--dim);font-size:11px;margin-top:2px}
+  #st{margin-left:0;max-width:320px;overflow-wrap:anywhere}
+  .session-clock{border-left:1px solid var(--line);padding-left:14px;color:var(--dim);font-size:11px}
+  #sessionleft{display:block;font-size:17px;font-weight:650;font-variant-numeric:tabular-nums;color:var(--text)}
+  #sessionleft.warn{color:var(--warn)}
+  .header-actions{display:flex;gap:6px;flex-wrap:wrap}
+  main{display:block;margin:0 0 0 220px;max-width:none;padding:24px 28px 40px;min-width:0}
+  .page-heading{display:flex;align-items:end;justify-content:space-between;gap:16px;margin-bottom:20px}
+  .page-heading h2{font-size:24px;letter-spacing:-.5px;margin:0;font-weight:650}
+  .page-heading p{color:var(--dim);margin:4px 0 0;font-size:12px}
+  .connection-details{margin-bottom:20px;border:1px solid var(--line);border-radius:10px;background:#fff}
+  summary{cursor:pointer;padding:13px 16px;font-weight:600;color:var(--text)}
+  .connection-details > .card{border:0;border-top:1px solid var(--line);border-radius:0 0 10px 10px}
+  .connbar .acts .hzfill{justify-content:flex-start}
+  .grp{border:0;padding:0;margin:0}
+  .grphead{display:none}
+  #grpsys{grid-template-columns:minmax(0,1fr);gap:18px}
+  #sum{grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px}
+  #sum > .card{grid-column:1/-1}
+  #tables{grid-template-columns:repeat(2,minmax(0,1fr));gap:18px;margin-top:0}
+  #tables .card{overflow-x:auto}
+  #tables table{min-width:340px}
+  .card,.kv{border-radius:10px;background:#fff;box-shadow:none;backdrop-filter:none;padding:18px}
+  .card h2{font-size:13px;letter-spacing:0;text-transform:none;text-shadow:none;color:var(--text);margin-bottom:14px}
+  .card h2::before{content:none}
+  .kv .v{font-size:26px;letter-spacing:-.4px}
+  .kv .k{font-size:12px}
+  .kv .s{margin-top:5px}
+  #grpveh{grid-template-columns:minmax(0,1fr)}
+  #veh{padding:0;background:transparent;border:0}
+  .vehgrid{grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:18px}
+  .vehcol{gap:18px;min-width:0}
+  #veh > .vehgrid > div > .card{background:#fff;border:1px solid var(--line);padding:18px;border-radius:10px}
+  #hw,#faults{margin-top:0}
+  .workspace-panel{min-width:0}
+  .workspace-panel > * + *{margin-top:18px}
+  .overview-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:16px}
+  .overview-card{text-align:left;width:100%;color:var(--text);background:#fff;border:1px solid var(--line);
+    padding:20px;box-shadow:none;min-height:164px;font-weight:400;display:flex;flex-direction:column;gap:10px;border-radius:10px}
+  .overview-card:hover{background:#f9fbff;border-color:#a6bdf0;filter:none}
+  .overview-card .k{color:var(--dim);font-size:12px}
+  .overview-card strong{font-size:22px;line-height:1.4;overflow-wrap:anywhere}
+  .overview-card .s{font-size:11px;color:var(--dim);margin-top:auto}
+  .overview-welcome{padding:25px;border-left:3px solid var(--acc)}
+  .overview-welcome h3{margin:0 0 6px;font-size:16px}
+  .overview-welcome p{margin:0;color:var(--dim)}
+  .workspace-tabs{display:flex;gap:6px;border-bottom:1px solid var(--line);padding-bottom:12px;flex-wrap:wrap}
+  .workspace-tabs button{background:transparent;color:var(--dim);box-shadow:none;border:1px solid transparent}
+  .workspace-tabs button.active{background:#eaf1ff;color:var(--acc);border-color:#d1dffc}
+  .workspace-empty{padding:36px 24px;text-align:center;border:1px dashed #ccd5e2;border-radius:10px;color:var(--dim);background:#fff}
+  .advanced{margin-top:12px;border:1px solid var(--line);border-radius:7px;background:#f8fafc}
+  .advanced summary{padding:10px 12px;font-size:12px}
+  .advanced > div{padding:0 12px 12px}
+  #map > .card,#rgbbox > .card,#pc3dbox > .card{min-width:0}
+  #mapviewport{min-height:240px}
+  #mapwrap{max-width:100%}
+  #map > div[style*="display:flex"]{flex-wrap:wrap}
+  input,select,textarea{background:#fff;color:var(--text);border:1px solid var(--line);border-radius:5px;font-family:inherit}
+  input{min-width:0}
+  select{padding:6px 8px;max-width:100%}
+  input:focus,select:focus,textarea:focus{outline:2px solid #b4ccff;outline-offset:1px;box-shadow:none}
+  button{color:#fff;background:var(--acc);border-color:var(--acc);box-shadow:none}
+  button:hover{filter:brightness(.96)}
+  button.sec{background:#fff;color:var(--text);border-color:var(--line)}
+  button.sec:hover{background:#f1f5fc;border-color:#abc1eb}
+  button:focus-visible,summary:focus-visible{outline:2px solid var(--acc);outline-offset:3px}
+  .bar,.diskbar,td.num .barm{background:#eaf0f7}
+  .bar>i,td.num .barm i,.mb,.diskbar>i{background:var(--acc);box-shadow:none!important}
+  .hwcell,.navbox,.qrow,.fitem,.durow,.ctrow{background:#f8fafc}
+  td,.durow,.ctrow{border-bottom-color:#e8edf3}
+  td.nm .hl{color:var(--text)}
+  .good{color:var(--ok)}.bad{color:var(--err)}.warnc{color:var(--warn)}.cool{color:var(--acc)}
+  .stall{color:var(--err);background:#fff1f2;box-shadow:none}
+  .diag{background:#fff7eb}.diag b{color:var(--warn)}
+  .lv.l3{background:#fde8eb;color:#b7283b}.lv.l2{background:#fff0d8;color:#905600}
+  .lv.l1{background:#fef6d4;color:#806400}.lv.l0{background:#eef2f6}
+  .jsonbox{background:#f7f9fc;color:#334155}
+  #log{height:calc(100vh - 310px);min-height:320px;margin-top:0;background:#f8fafc;color:#475569}
+  /* 终端外壳与 xterm 统一底色，尺寸变化时由 tmFit 同步实际可见行列数。 */
+  #cardtm .tm-heading{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:16px}
+  #cardtm .tm-heading h2{margin:0}
+  .tm-subtitle{margin:4px 0 0;font-size:12px;color:var(--dim)}
+  .tm-shell{border:1px solid #27354b;border-radius:10px;overflow:hidden;background:#111b2b;box-shadow:0 6px 18px rgba(15,23,42,.09)}
+  .tm-toolbar{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;padding:11px 16px;background:#1b283d;border-bottom:1px solid #2b3950}
+  .tm-session{display:flex;align-items:center;gap:10px;min-width:0}
+  .tm-session-icon{color:#94b9ee;font:600 15px Consolas,monospace}
+  #tmst{font-size:12px;color:#a7b5c9}
+  #tmst.ok{color:#81d7b0} #tmst.err{color:#ffb0b0}
+  .tm-actions{display:flex;gap:8px;flex-wrap:wrap}
+  #cardtm .tm-actions button{font-size:12px;padding:6px 11px;border:1px solid #43516a;background:transparent;color:#d5dfec;box-shadow:none}
+  #cardtm .tm-actions #tmstart{background:#3169bd;border-color:#477fce;color:#fff}
+  #cardtm .tm-actions button:hover:not(:disabled){background:#30435f}
+  #cardtm .tm-actions button:disabled{opacity:.38}
+  /* 显示区高度为原来的两倍，保留随窗口高度变化的范围。 */
+  #tmout{height:clamp(640px,calc(200vh - 1200px),1200px);min-height:640px;margin:0;padding:16px;background:#111b2b;color:#d3dfef;border:0;border-radius:0;font:13px/1.45 Consolas,monospace}
+  #tmout:focus-within{box-shadow:inset 0 0 0 1px #5287d0}
+  .tm-placeholder{height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:9px;color:#8293ad;text-align:center}
+  .tm-placeholder strong{color:#ccd7e8;font-size:14px;font-weight:500}
+  .tm-placeholder span{font:12px/1.7 system-ui,sans-serif}
+  .tm-help{display:flex;gap:10px 18px;flex-wrap:wrap;margin-top:12px;color:var(--dim);font-size:11px}
+  .tm-help kbd{display:inline-block;margin-right:4px;padding:1px 5px;border:1px solid #dce2ea;border-radius:4px;background:#f7f9fc;font:11px Consolas,monospace;color:#465771}
+  @media(max-width:600px){.tm-toolbar{padding:10px;align-items:flex-start}.tm-session{width:100%}.tm-actions{width:100%}#tmout{padding:12px}.tm-subtitle{font-size:11px}}
+  #glout,#syout{background:#f8fafc!important;color:#334155!important;border-color:var(--line)!important}
+  #glsrcs{grid-template-columns:repeat(auto-fit,minmax(160px,1fr))!important}
+  #alertv{box-shadow:inset 0 0 0 3px var(--err);animation:none}
+  #alertb{font-size:18px;box-shadow:none;background:var(--err)}
+  .preview-banner{padding:10px 28px;background:#fff4d9;color:#80550c;border-bottom:1px solid #eddbab;margin-left:220px}
+  @media(min-width:1600px){#sum{grid-template-columns:repeat(4,minmax(0,1fr))}}
+  @media(max-width:1200px){.overview-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+    #tables,.vehgrid{grid-template-columns:minmax(0,1fr)}header{padding:12px 20px}main{padding:20px}}
+  @media(max-width:760px){.sidebar{position:static;width:auto;padding:14px;border-right:0;border-bottom:1px solid var(--line)}
+    .brand{font-size:16px}.brand small,.nav-label,.sidebar-foot{display:none}
+    .sidebar nav{flex-direction:row;overflow-x:auto;margin-top:12px;gap:4px}
+    .sidebar button{width:auto;white-space:nowrap;padding:8px 10px}.nav-index{display:none}
+    header{margin-left:0;padding:12px 16px;gap:10px}.header-title{flex:1 1 100%}
+    .header-actions{flex:1 1 100%}main{margin-left:0;padding:20px 14px}
+    .overview-grid{grid-template-columns:minmax(0,1fr)}.overview-card{min-height:130px}
+    #sum{grid-template-columns:repeat(2,minmax(0,1fr))}.vergrid,.navpair{grid-template-columns:minmax(0,1fr)}
+    .connbar .fields > div{flex:1 1 140px}.fitem{grid-template-columns:68px minmax(0,1fr)}
+    .fmeta{grid-column:2;text-align:left}.preview-banner{margin-left:0;padding:10px 16px}}
+</style>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+</head>
+<body>
+<aside class="sidebar" aria-label="工作台导航">
+  <div class="brand">AOTING <small>远程机器 · 监控工作台</small></div>
+  <div class="nav-label">工作空间</div>
+  <nav aria-label="主导航">
+    <button type="button" data-workspace="overview" class="active" aria-current="page"><span class="nav-index">01</span>概览</button>
+    <button type="button" data-workspace="resources"><span class="nav-index">02</span>系统资源</button>
+    <button type="button" data-workspace="vehicle"><span class="nav-index">03</span>任务与硬件</button>
+    <button type="button" data-workspace="spatial"><span class="nav-index">04</span>空间感知</button>
+    <button type="button" data-workspace="debug"><span class="nav-index">05</span>日志与终端</button>
+  </nav>
+  <div class="sidebar-foot">远程状态监控<br>连接与会话状态始终显示在顶部</div>
+</aside>
+<header>
+  <div class="header-title"><h1>远程机器状态监控 <span class="ver" id="pver">v1.53</span></h1>
+    <small id="machine-label">尚未连接机器</small></div>
+  <span id="st" class="dim" role="status">未连接</span>
+  <div class="session-clock">会话剩余<strong id="sessionleft">--:--</strong></div>
+  <div class="header-actions">
+    <button id="bconn">连接</button>
+    <button id="bdisc" class="sec" disabled>断开</button>
+    <button id="bext" class="sec" disabled title="把自动断开时间往后推 5 分钟">延长</button>
+    <button id="bcopy" class="sec">复制当前快照</button>
+    <button id="connection-toggle" class="sec" aria-controls="connection-details" aria-expanded="false">连接配置</button>
+  </div>
+</header>
+
+<main>
+  <div class="page-heading"><div><h2 id="workspace-title">概览</h2>
+    <p id="workspace-description">任务、资源、定位与故障，一处掌握机器当前状态。</p></div></div>
+  <details id="connection-details" class="connection-details">
+    <summary>连接配置 <span class="dim">· 主机、凭据与采集频率</span></summary>
+  <!-- ── 连接配置（顶部通栏，横排紧凑） ── -->
+  <div class="card connbar">
+    <h2>连接配置</h2>
+    <div class="fields">
+      <div class="f-host"><label>主机</label><input id="host" value="frp.aotbot.com" autocomplete="off"></div>
+      <div class="f-port"><label>端口</label><input id="port" type="number" placeholder="如 21009" autocomplete="off"></div>
+      <div class="f-user"><label>用户名</label><input id="user" value="aoting" autocomplete="off"></div>
+      <div class="f-pwd" id="pwdbox"><label>密码（免密可留空）</label>
+        <input id="pwd" type="password" autocomplete="current-password" placeholder="免密登录可留空"></div>
+    </div>
+    <div class="acts">
+      <span class="hzfill">
+        <span class="dim" style="font-size:11px">采集频率</span>
+        <span id="hzbox" style="display:inline-flex;flex-wrap:wrap;gap:4px"></span>
+        <span class="dim" style="font-size:10.5px">（默认 1 Hz，点一下即时生效）</span>
+      </span>
+    </div>
+    <div class="profbar">
+      <span class="dim" style="font-size:11px">已保存机器</span>
+      <select id="profsel">
+        <option value="">— 选择已保存机器 —</option>
+      </select>
+      <button id="bsave" class="sec" disabled
+              title="把当前这台机器的主机/端口/账号/密码记下来，起个名字，下次直接选">保存当前</button>
+      <button id="bdelprof" class="sec" title="删除选中的那条记录">删除</button>
+      <span class="pnote"><span id="profnote" class="dim"></span></span>
+    </div>
+    <div id="pwdnote" class="dim" style="font-size:11px;margin-top:5px">
+      默认免密登录（SSH 密钥）。需要密码时直接填上面的密码框；填过一次会记在本机，下次自动带出。
+    </div>
+  </div>
+  </details>
+  <div id="msg" role="status"></div>
+  <div id="agentver" class="dim" style="font-size:11px;margin-bottom:16px"></div>
+
+  <section id="workspace-overview" class="workspace-panel" aria-label="概览">
+    <div id="overview-metrics" class="overview-grid"></div>
+    <div class="card overview-welcome"><h3 id="overview-message">等待连接机器</h3>
+      <p id="overview-detail">展开顶部连接配置，填写主机与端口后点击连接。连接后可在左侧切换工作区。</p></div>
+  </section>
+
+  <!-- ── 右：内容 ── -->
+  <div>
+    <!-- 单块渲染出错时在这里点名，其余栏目照常刷新 -->
+    <div id="rerr" style="display:none;margin-bottom:10px;padding:7px 10px;
+         border:1px solid var(--warn);border-radius:5px;
+         background:rgba(255,193,7,.10);color:var(--warn);font-size:12px"></div>
+    <div class="grp g2 workspace-panel" id="grpsys" hidden>
+      <div class="grphead">① 系统资源</div>
+      <div id="sum"></div>
+      <div id="tables"></div>
+      <!-- 磁盘条数不定（挂载点 + 4 个目录），独占整行，避免撑高后压住旁边 -->
+      <div id="disk" class="full"></div>
+    </div>
+
+    <div class="grp g2 workspace-panel" id="grpveh" hidden>
+      <div class="grphead">② 车辆状态信息</div>
+      <!-- 任务 / 导航 / 定位 / 硬件 / 版本 合并成一张卡：
+           外层一个大 card，内部各块只保留小标题，不再各自独立成卡。 -->
+      <div class="card full" id="veh">
+        <div class="vehgrid">
+          <div id="tasks"></div>
+          <div class="vehcol">
+            <div id="nav"></div>
+            <div id="axslam"></div>
+            <div id="hw"></div>
+            <div id="vers"></div>
+          </div>
+        </div>
+      </div>
+      <!-- 故障条数不定（0 条 ~ 几十条），单独占满一行并按条数限高滚动 -->
+      <div id="faults" class="full"></div>
+    </div>
+
+    <section id="workspace-spatial" class="workspace-panel" aria-label="空间感知" hidden>
+      <div class="workspace-tabs" role="tablist" aria-label="空间感知视图">
+        <button id="tab-map" role="tab" aria-controls="map" aria-selected="true" class="active" data-spatial="map">地图与定位</button>
+        <button id="tab-rgb" role="tab" aria-controls="rgbbox" aria-selected="false" data-spatial="rgbbox" tabindex="-1">彩色相机</button>
+        <button id="tab-pc3d" role="tab" aria-controls="pc3dbox" aria-selected="false" data-spatial="pc3dbox" tabindex="-1">深度点云</button>
+      </div>
+      <div id="spatial-offline" class="workspace-empty">未连接机器，空间数据尚未加载。连接后保留原地图、相机门禁与点云订阅逻辑。</div>
+      <div id="map"></div>
+      <div id="rgbbox" hidden></div>
+      <div id="pc3dbox" hidden></div>
+    </section>
+
+    <div class="grp g2 workspace-panel" id="dbg" hidden>
+      <div class="workspace-tabs" role="tablist" aria-label="日志与终端视图">
+        <button id="tab-log" role="tab" aria-controls="cardlog" aria-selected="true" class="active" data-debug="cardlog">连接日志</button>
+        <button id="tab-glog" role="tab" aria-controls="cardgl" aria-selected="false" data-debug="cardgl" tabindex="-1">日志提取</button>
+        <button id="tab-database" role="tab" aria-controls="carddb" aria-selected="false" data-debug="carddb" tabindex="-1">数据库提取</button>
+        <button id="tab-terminal" role="tab" aria-controls="cardtm" aria-selected="false" data-debug="cardtm" tabindex="-1">车机终端</button>
+        <button id="tab-topic" role="tab" aria-controls="cardct" aria-selected="false" data-debug="cardct" tabindex="-1">自定义话题</button>
+      </div>
+      <div id="debug-offline" class="workspace-empty" hidden>未连接机器。连接日志可直接查看，其他工具请连接后使用。</div>
+      <div class="grphead">③ 调试工具</div>
+      <div class="card" id="carddb" hidden>
+        <h2>数据库提取</h2>
+        <p class="dim">只读获取车机 SQLite 快照，再在本机浏览。各库分别备份，快照不代表同一时刻。</p>
+        <div id="dbsources" style="display:flex;gap:10px;flex-wrap:wrap"></div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin:12px 0">
+          <button id="dball" class="sec">全选</button><button id="dbnone" class="sec">清空</button>
+          <button id="dblist" class="sec">刷新文件状态</button>
+          <button id="dbcapture">获取所选快照</button>
+          <button id="dbzip" class="sec" disabled>下载本批快照 ZIP</button>
+        </div>
+        <div id="dbstatus" role="status" style="white-space:pre-wrap"></div>
+        <div class="db-fields" style="display:flex;gap:12px;align-items:end;flex-wrap:wrap;margin:16px 0">
+          <label>已有快照<select id="dbsnapshot"><option value="">请先获取快照</option></select></label>
+          <label>数据表<select id="dbtable"><option value="">选择数据表</option></select></label>
+          <button id="dbdownload" class="sec" disabled>下载完整快照</button>
+        </div>
+        <div id="dbinfo" class="dim"></div>
+        <details><summary>字段结构</summary><div id="dbschema" style="white-space:pre-wrap;font-family:Consolas,monospace"></div></details>
+        <div class="db-fields" style="display:flex;gap:8px;align-items:end;flex-wrap:wrap;margin:12px 0">
+          <label>筛选字段<select id="dbfield"><option value="">请选择</option></select></label>
+          <label>包含文本<input id="dbvalue" maxlength="500" placeholder="输入筛选内容"></label>
+          <label>范围起值<input id="dbstart" maxlength="100" placeholder="可选，使用字段原始单位"></label>
+          <label>范围止值<input id="dbend" maxlength="100" placeholder="可选，使用字段原始单位"></label>
+          <label>排序字段<select id="dbsort"><option value="">默认顺序</option></select></label>
+          <label>顺序<select id="dbdirection"><option value="asc">升序</option><option value="desc">降序</option></select></label>
+          <button id="dbapply" disabled>查询</button><button id="dbcsv" class="sec" disabled>导出筛选结果 CSV</button>
+        </div>
+        <div id="dbdata" style="overflow:auto;max-height:580px;border:1px solid var(--line)"></div>
+        <div style="display:flex;gap:10px;align-items:center;margin-top:12px">
+          <button id="dbprev" class="sec" disabled>上一页</button><span id="dbpage">每页 100 行</span><button id="dbnext" class="sec" disabled>下一页</button>
+        </div>
+        <p class="dim">时间字段范围按原始格式填写，例如 ISO 时间、Unix 秒或毫秒，不自动猜测单位。单库上限 100 MiB；CSV 上限 10000 行。长文本仅预览前 2000 字符，完整数据请下载快照。快照保留 1 小时，最多 14 份。</p>
+      </div>
+      <div class="card" id="cardct">
+        <h2>自定义话题</h2>
+      <div style="display:flex;gap:8px">
+        <input id="ctname" placeholder="话题名，如 /odom_origin" autocomplete="off">
+        <button id="ctadd" style="flex:0 0 auto">订阅</button>
+      </div>
+      <div class="dim" style="font-size:11px;margin-top:5px">
+        填话题名点订阅，内容会原样展示。内容过大时自动截断并注明。
+      </div>
+      <div id="ctlist" style="margin-top:8px"></div>
+      <div id="cterr" style="font-size:11.5px"></div>
+    </div>
+    <div class="card" id="cardgl">
+      <h2>glog 日志提取</h2>
+      <div style="display:flex;gap:5px;align-items:center;flex-wrap:wrap">
+        <span class="dim" style="font-size:11.5px;flex:0 0 auto">基准时间</span>
+        <input id="gly" type="number" min="2000" max="2099" placeholder="年"
+               style="flex:0 0 66px" autocomplete="off"><span class="dim" style="font-size:11px">年</span>
+        <input id="glmo" type="number" min="1" max="12" placeholder="月"
+               style="flex:0 0 52px" autocomplete="off"><span class="dim" style="font-size:11px">月</span>
+        <input id="gld" type="number" min="1" max="31" placeholder="日"
+               style="flex:0 0 52px" autocomplete="off"><span class="dim" style="font-size:11px">日</span>
+        <input id="glh" type="number" min="0" max="23" placeholder="时"
+               style="flex:0 0 52px" autocomplete="off"><span class="dim" style="font-size:11px">时</span>
+        <input id="glmi" type="number" min="0" max="59" placeholder="分"
+               style="flex:0 0 52px" autocomplete="off"><span class="dim" style="font-size:11px">分</span>
+        <input id="gls" type="number" min="0" max="59" placeholder="秒"
+               style="flex:0 0 52px" autocomplete="off"><span class="dim" style="font-size:11px">秒</span>
+        <button id="glnow" class="sec" style="flex:0 0 auto">车端当前时间</button>
+        <span style="flex:0 0 auto;width:1px;height:18px;background:#2a3550;margin:0 2px"></span>
+        <span class="dim" style="font-size:11.5px;flex:0 0 auto">前后 ±</span>
+        <input id="glwin" type="number" min="1" step="1" value="5"
+               style="flex:0 0 66px">
+        <select id="glunit" style="flex:0 0 auto">
+          <option value="1">秒</option>
+          <option value="60" selected>分钟</option>
+        </select>
+        <span class="dim" style="font-size:11.5px;flex:0 0 auto">级别</span>
+        <select id="gllv" style="flex:0 0 auto">
+          <option value="">全部（I/W/E/F）</option>
+          <option value="WEF">警告及以上</option>
+          <option value="EF">仅错误</option>
+        </select>
+        <button id="glall" class="sec" style="flex:0 0 auto">全选</button>
+        <button id="glnone" class="sec" style="flex:0 0 auto">清空</button>
+        <button id="gldef" class="sec" style="flex:0 0 auto">诊断+任务</button>
+      </div>
+      <div id="glsrcs"
+           style="display:grid;grid-template-columns:repeat(6,1fr);gap:3px 10px;margin-top:9px"></div>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:8px">
+        <button id="glgo" style="flex:0 0 auto">提取</button>
+        <button id="glcopy" class="sec" style="flex:0 0 auto">复制</button>
+        <button id="gldl" class="sec" style="flex:0 0 auto">下载</button>
+        <span id="glcnt" class="dim" style="font-size:11.5px"></span>
+      </div>
+      <div id="glst" class="dim" style="font-size:11.5px;margin-top:6px"></div>
+      <div style="display:flex;gap:6px;align-items:center;margin-top:6px">
+        <span class="dim" style="font-size:11.5px;flex:0 0 auto">搜索</span>
+        <input id="glsearch" placeholder="在结果里找关键字（回车或输入即筛）"
+               style="flex:1 1 auto" autocomplete="off">
+        <span id="glhit" class="dim" style="font-size:11.5px;flex:0 0 auto"></span>
+        <button id="glsclr" class="sec" style="flex:0 0 auto">清除</button>
+      </div>
+      <textarea id="glout" readonly spellcheck="false"
+        style="width:100%;height:520px;margin-top:6px;resize:vertical;
+               background:#0b1020;color:#cfe3ff;border:1px solid #2a3550;
+               border-radius:5px;padding:8px;font-family:Consolas,Monaco,monospace;
+               font-size:11.5px;line-height:1.5;white-space:pre;overflow:auto"></textarea>
+      <div class="dim" style="font-size:11px;margin-top:5px">
+        输入一个时间点，把 <b>多个 glog 目录</b>里这段时间内的日志行抽出来、按时间合并。
+        车端按文件名里的开始时间圈定候选文件，只回传命中的行。
+        找不到时会告诉你最近的日志落在哪个文件、什么时候。默认一个都不勾。
+      </div>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:12px">
+        <span style="font-size:12px;color:var(--acc);flex:0 0 auto">系统日志</span>
+        <span class="dim" style="font-size:11px;flex:1 1 auto">
+          dmesg + 串口/USB 断连（用上面同一个时间窗）。system 目录已并入上面来源清单，勾 system 即可
+        </span>
+        <button id="sygo" style="flex:0 0 auto">提取</button>
+        <button id="sycpy" class="sec" style="flex:0 0 auto">复制</button>
+        <button id="sydl" class="sec" style="flex:0 0 auto">下载</button>
+      </div>
+      <div id="syst" class="dim" style="font-size:11.5px;margin-top:6px"></div>
+      <div style="display:flex;gap:6px;align-items:center;margin-top:6px">
+        <span class="dim" style="font-size:11.5px;flex:0 0 auto">搜索</span>
+        <input id="sysearch" placeholder="在系统日志里找关键字"
+               style="flex:1 1 auto" autocomplete="off">
+        <span id="syhit" class="dim" style="font-size:11.5px;flex:0 0 auto"></span>
+        <button id="sysclr" class="sec" style="flex:0 0 auto">清除</button>
+      </div>
+      <textarea id="syout" readonly spellcheck="false"
+        style="width:100%;height:440px;margin-top:6px;resize:vertical;
+               background:#0b1020;color:#cfe3ff;border:1px solid #2a3550;
+               border-radius:5px;padding:8px;font-family:Consolas,Monaco,monospace;
+               font-size:11.5px;line-height:1.5;white-space:pre;overflow:auto"></textarea>
+    </div>
+    <div class="card" id="cardtm">
+      <div class="tm-heading">
+        <div><h2>车机终端</h2><p class="tm-subtitle">在车机上执行命令，当前目录与会话状态持续保留</p></div>
+      </div>
+      <div class="tm-shell">
+        <div class="tm-toolbar">
+          <div class="tm-session"><span class="tm-session-icon" aria-hidden="true">&gt;_</span><span id="tmst" class="dim" role="status">未打开</span></div>
+          <div class="tm-actions">
+            <button id="tmstart" class="sec">打开终端</button>
+            <button id="tmintr" class="sec" disabled>中断</button>
+            <button id="tmstop" class="sec" disabled>关闭</button>
+          </div>
+        </div>
+        <div id="tmout"><div class="tm-placeholder"><strong>远程终端尚未打开</strong><span>点击「打开终端」开始会话<br>连接后可在此直接输入命令，使用 Tab 补全</span></div></div>
+      </div>
+      <div class="tm-help">
+        <span><kbd>Tab</kbd>补全 · 连按查看候选</span><span><kbd>↑</kbd><kbd>↓</kbd>历史命令</span>
+        <span><kbd>Ctrl+C</kbd>中断</span><span><kbd>Shift+Tab</kbd>移出终端</span>
+      </div>
+    </div>
+    <div class="card" id="cardlog">
+      <h2>连接日志</h2>
+      <div id="log"></div>
+    </div>
+    </div>
+  </div>
+</main>
+
+<div id="alertv"></div>
+<div id="alertb"></div>
+
+<script>
+const PAGE_VER = '1.53';
+// 剩余多少秒把倒计时标红；点「延长」一次加多少秒（与服务端一致）
+const WARN_SEC = 60;
+const EXTEND_SEC = 300;
+// 剩余多少秒开始全屏告警：闪烁红框 + 顶部横幅。
+// 到点会直接断开，而这工具常常是开着放一边盯数据，没人盯着右上角那行
+// 小字 —— 光把数字标红不够，得让人余光能看见。
+const ALERT_SEC = 30;
+let S = {connected:false, timer:null, lseq:0, since:0, lastData:null, connAt:0,
+         pendingHz:null, mapName:'', mapUrl:'', mapBusy:false};
+
+const $ = id => document.getElementById(id);
+
+const WORKSPACES = {
+  overview: ['workspace-overview', '概览', '任务、资源、定位与故障，一处掌握机器当前状态。'],
+  resources: ['grpsys', '系统资源', '整机指标、进程排行与磁盘空间，完整宽度展开。'],
+  vehicle: ['grpveh', '任务与硬件', '查看任务队列、导航状态、定位、硬件与版本详情。'],
+  spatial: ['workspace-spatial', '空间感知', '按需查看真实地图、彩色相机与深度点云。'],
+  debug: ['dbg', '日志与终端', '连接日志、日志提取、交互终端与话题订阅。']
+};
+let activeWorkspace = 'overview', activeSpatial = 'map', activeDebug = 'cardlog';
+
+function resizeWorkspace(){
+  requestAnimationFrame(function(){
+    if (activeWorkspace !== 'spatial') return;
+    if (activeSpatial === 'map' && $('mapcv') && typeof fitMapCanvas === 'function') fitMapCanvas();
+    if (activeSpatial === 'pc3dbox' && $('pc3dcv') && typeof drawPC3D === 'function') drawPC3D(null);
+    // 相机保留原始帧尺寸，由 CSS 等比缩放，切换面板无需重置 canvas。
+  });
+}
+function updateWorkspaceVisibility(){
+  Object.keys(WORKSPACES).forEach(function(key){
+    $(WORKSPACES[key][0]).hidden = key !== activeWorkspace;
+  });
+  ['map','rgbbox','pc3dbox'].forEach(function(id){ $(id).hidden = id !== activeSpatial; });
+  ['cardlog','cardgl','cardtm','cardct','carddb'].forEach(function(id){
+    $(id).hidden = id !== activeDebug || (id !== 'cardlog' && !S.connected);
+  });
+  $('spatial-offline').hidden = S.connected;
+  $('debug-offline').hidden = S.connected || activeDebug === 'cardlog';
+}
+function selectWorkspace(key){
+  if (!WORKSPACES[key]) return;
+  activeWorkspace = key;
+  $('workspace-title').textContent = WORKSPACES[key][1];
+  $('workspace-description').textContent = WORKSPACES[key][2];
+  document.querySelectorAll('.sidebar [data-workspace]').forEach(function(btn){
+    const on = btn.dataset.workspace === key;
+    btn.classList.toggle('active', on);
+    if (on) btn.setAttribute('aria-current', 'page');
+    else btn.removeAttribute('aria-current');
+  });
+  updateWorkspaceVisibility();
+  resizeWorkspace();
+}
+function selectWorkspaceTab(kind, id){
+  if (kind === 'spatial') activeSpatial = id;
+  else activeDebug = id;
+  document.querySelectorAll('[data-' + kind + ']').forEach(function(btn){
+    const on = btn.dataset[kind] === id;
+    btn.classList.toggle('active', on);
+    btn.setAttribute('aria-selected', String(on));
+    btn.tabIndex = on ? 0 : -1;
+  });
+  updateWorkspaceVisibility();
+  resizeWorkspace();
+}
+function overviewCard(title, value, note, target, cls){
+  return '<button type="button" class="overview-card" data-workspace="' + target + '">'
+    + '<span class="k">' + esc(title) + '</span><strong class="' + (cls || '') + '">'
+    + esc(value) + '</strong><span class="s">' + esc(note) + '</span></button>';
+}
+function renderOverview(d){
+  const tk = d && d.task, a = d && d.axslam, f = d && d.faults;
+  const af = (a && a.fields) || {};
+  const resource = d ? 'CPU ' + (d.cpu || 0) + '%' : '等待数据';
+  const mem = d && d.mem_total ? (d.mem_used / d.mem_total * 100).toFixed(0) + '%' : '—';
+  const taskReady = tk && tk.ok && !tk.err;
+  const poseReady = a && a.ok && !a.err;
+  const faultReady = f && f.ok && !f.err;
+  const items = faultReady ? (f.items || []) : [];
+  $('overview-metrics').innerHTML =
+    overviewCard('当前任务', taskReady ? (tk.name || tk.statusText || '暂无任务消息') : '等待数据',
+      taskReady ? (tk.statusText || '已订阅') : '连接后显示当前任务与队列', 'vehicle', taskReady ? toneCls(tk.statusTone) : '')
+    + overviewCard('系统资源', resource, d ? '内存 ' + mem + ' · 进入查看进程与磁盘' : 'CPU / 内存 / 磁盘', 'resources', '')
+    + overviewCard('定位状态', poseReady ? (boolOf(af.reliable) === null ? '可靠性未知' : (boolOf(af.reliable) ? '定位可靠' : '定位不可靠')) : '等待数据',
+      poseReady ? '状态 ' + (af.state == null ? '—' : af.state) + ' · 质量 ' + (af.position_quality == null ? '—' : af.position_quality) : '连接后显示定位可靠性与质量', 'vehicle', poseReady && boolOf(af.reliable) === false ? 'err' : '')
+    + overviewCard('故障信息', faultReady ? (items.length ? items.length + ' 条故障' : '当前无故障') : '等待数据',
+      faultReady ? '总级别 ' + (f.level == null ? '—' : f.level) + ' · 进入查看详情' : '等待诊断数据，尚不能判断故障状态', 'vehicle', items.length ? 'err' : '');
+  $('overview-message').textContent = !S.connected ? '等待连接机器' : (d ? '机器状态已更新' : '已连接，等待首帧数据');
+  $('overview-detail').textContent = !S.connected
+    ? '展开顶部连接配置，填写主机与端口后点击连接。连接后可在左侧切换工作区。'
+    : (d ? '左侧切换查看详细数据。空间感知与日志终端提供独立工作区。' : '采集数据到达后将自动显示任务、资源、定位与故障。');
+}
+function initWorkspace(){
+  document.addEventListener('click', function(event){
+    const btn = event.target.closest('[data-workspace], [data-spatial], [data-debug]');
+    if (!btn) return;
+    if (btn.dataset.workspace) selectWorkspace(btn.dataset.workspace);
+    else if (btn.dataset.spatial) selectWorkspaceTab('spatial', btn.dataset.spatial);
+    else selectWorkspaceTab('debug', btn.dataset.debug);
+  });
+  document.querySelectorAll('[role="tablist"]').forEach(function(list){
+    list.addEventListener('keydown', function(event){
+      if (!['ArrowLeft','ArrowRight','Home','End'].includes(event.key)) return;
+      const tabs = Array.from(list.querySelectorAll('[role="tab"]'));
+      const i = tabs.indexOf(document.activeElement);
+      const next = event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1
+        : (i + (event.key === 'ArrowRight' ? 1 : -1) + tabs.length) % tabs.length;
+      event.preventDefault(); tabs[next].click(); tabs[next].focus();
+    });
+  });
+  $('connection-toggle').onclick = function(){
+    $('connection-details').open = !$('connection-details').open;
+  };
+  $('connection-details').addEventListener('toggle', function(){
+    $('connection-toggle').setAttribute('aria-expanded', String(this.open));
+    resizeWorkspace();
+  });
+  window.addEventListener('resize', resizeWorkspace);
+  if (typeof ResizeObserver !== 'undefined'){
+    const observer = new ResizeObserver(resizeWorkspace);
+    observer.observe($('workspace-spatial'));
+  }
+  renderOverview(null);
+  selectWorkspace('overview');
+}
+
+// 超时全屏告警。on 为 false 时必须撤掉 —— 断开后横幅还挂着会让人以为
+// 还在连接中。
+// 让车端订阅 / 退订一路激光。失败要把勾选状态弹回去 —— 否则界面显示
+// "开了" 而车端没订阅，用户会以为话题没数据，往错的方向查。
+async function laserSwitch(topic, on){
+  try{
+    const r = await fetch('/api/laser', {method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({topic: topic, on: !!on})});
+    const j = await r.json();
+    if (!j.ok){
+      const ck = (topic === '/scan') ? $('mapscan') : $('mapd2l');
+      if (ck) ck.checked = !on;
+      setMsg(topic + ' 开关没生效：' + (j.err || ('stdin=' + (j.via && j.via.stdin)
+              + ' 标志文件=' + (j.via && j.via.flag))), 'warn');
+    }
+  }catch(e){
+    const ck = (topic === '/scan') ? $('mapscan') : $('mapd2l');
+    if (ck) ck.checked = !on;
+    setMsg('连不上本地服务，' + topic + ' 开关未下发', 'err');
+  }
+}
+
+function setAlert(on, left){
+  const v = $('alertv'), b = $('alertb');
+  if (!v || !b) return;
+  v.className = on ? 'on' : '';
+  b.className = on ? 'on' : '';
+  if (on){
+    // 剩余秒数取整：每帧跳动的数字反而读不清
+    b.innerHTML = '即将超时断开 · 剩 ' + Math.max(0, Math.ceil(left || 0)) + ' 秒'
+                + '<small>点击此处立即延长 5 分钟（等同点「延长」按钮）</small>';
+  }
+}
+const esc = s => String(s == null ? '' : s)
+  .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+
+function setMsg(t, cls){ const e=$('msg'); e.className = cls||'dim'; e.textContent = t||''; }
+
+function fmtUp(s){
+  s = Math.max(0, Math.floor(s||0));
+  const d = Math.floor(s/86400), h = Math.floor(s%86400/3600), m = Math.floor(s%3600/60);
+  return (d? d+'天 ':'') + (h? h+'小时 ':'') + m+'分钟';
+}
+function fmtBoot(ts){
+  if (!ts) return '';
+  const d = new Date(ts * 1000);
+  const p = n => String(n).padStart(2, '0');
+  return (d.getMonth()+1) + '-' + p(d.getDate()) + ' ' + p(d.getHours()) + ':' + p(d.getMinutes());
+}
+function fmtConn(ms){
+  const s = Math.max(0, Math.floor(ms / 1000));
+  const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60), ss = s % 60;
+  const tail = (h ? h + ':' + String(m).padStart(2,'0') : String(m));
+  return tail + ':' + String(ss).padStart(2,'0');
+}
+function fmtLeft(s){
+  s = Math.max(0, Math.floor(s||0));
+  return Math.floor(s/60) + ':' + String(s%60).padStart(2,'0');
+}
+
+function barPct(v){
+  const n = Math.max(0, Math.min(100, v||0));
+  const cls = n>=85 ? 'crit' : (n>=60 ? 'hi' : '');
+  return '<div class="bar"><i class="'+cls+'" style="width:'+n.toFixed(1)+'%"></i></div>';
+}
+
+// 任务进度条：0→100 红→橙→黄→绿。
+// 进度是"越接近完成越好"，跟 CPU/内存那种"越高越危险"的条语义相反，
+// 沿用 barPct 的临界配色会让人把 90% 看成告警，所以单独一套。
+function progBar(v){
+  const n = Math.max(0, Math.min(100, v || 0));
+  const c = n < 25 ? '#ff5a5a' : (n < 50 ? '#ff9628' : (n < 75 ? '#ffd93b' : '#7ee787'));
+  return '<div class="bar"><i style="width:' + n.toFixed(1) + '%;background:' + c
+       + ';box-shadow:0 0 8px ' + c + '"></i></div>';
+}
+
+function tbl(title, rows, key, unit, total, unitMain){
+  // TOPN 个槽位固定画满。两个原因会让表格高度来回跳：
+  //   1) 车端最多回 5 条，但进程被过滤/刚启动时可能不足 5 条；
+  //   2) 认出 ROS 节点名时是「主行+副行」两行，认不出只有一行 ——
+  //      识别时有时无（进程重启、pid 变化）就让行高在两者间反复横跳。
+  // 所以缺槽补空行，且副行永远占位（没内容也渲染一个 &nbsp;）。
+  const TOPN = 5;
+  rows = rows || [];
+  let mx = 1;
+  rows.forEach(r => { mx = Math.max(mx, r[key]||0); });
+  let h = '<div class="card"><h2>'+title+'</h2>';
+  h += '<table><colgroup><col style="width:62%"><col style="width:16%">'
+    +  '<col style="width:22%"></colgroup>'
+    +  '<thead><tr><th>进程</th><th>PID</th><th style="text-align:right">'+unit+'</th></tr></thead><tbody>';
+  for (let i = 0; i < TOPN; i++){
+    const r = rows[i];
+    if (!r){
+      h += '<tr class="ph"><td class="nm"><div>'
+        +  (i === 0 && !rows.length ? '<span class="dim">暂无数据</span>' : '&nbsp;')
+        +  '</div><div class="dim" style="font-size:11px">&nbsp;</div></td>'
+        +  '<td>&nbsp;</td><td class="num"><div class="numv">&nbsp;</div>'
+        +  '<div class="barm"><i style="width:0%"></i></div></td></tr>';
+      continue;
+    }
+    // 进度条宽度用【百分比】而不是固定 px：原来是数值文本后面跟一个
+    // 0~60px 的 inline-block，两者加起来宽过 td 的 62px 时就会折行 ——
+    // 于是同一列「有时一行、有时两行」，行高跟着跳。改成块级、独立一行、
+    // 宽度按百分比后，结构永远两行，高度恒定。
+    // 百分比：优先按【总量】算真实占比（内存条就该显示占整机的百分之几），
+    // 拿不到总量时退回「占 TOP5 里最大值」的相对比例。
+    const pct = Math.max(0, Math.min(100, total
+      ? (r[key]||0) / total * 100
+      : (r[key]||0) / mx * 100));
+    // 一堆同名 python 看不出谁是谁 —— 认出 ROS 节点名就把它放主行，
+    // 进程名退到副行；认不出就还显示进程名。
+    const node = (r.node || '').trim();
+    const main = node || r.name;
+    const sub  = node ? r.name : '';
+    h += '<tr><td class="nm" title="'+esc(r.name + (node ? ' → ' + node : ''))+'">'
+      +  '<div'+(node ? ' class="hl"' : '')+'>'+esc(main)+'</div>'
+      +  '<div class="dim" style="font-size:11px">'+(sub ? esc(sub) : '&nbsp;')+'</div>'
+      +  '</td>'
+      +  '<td>'+r.pid+'</td>'
+      // 数值 + 百分比写在一行、宽度按百分比的条另起一行 ——
+      // 折行会让同一列时高时矮（见 TOPN 注释里的高度跳动说明）。
+      +  '<td class="num"><div class="numv">'+(r[key]||0)
+      +    (total ? ' <span style="opacity:.75;font-size:11px">'
+      +      + pct.toFixed(1) + '%' + '</span>' : '')
+      +  '</div>'
+      +  '<div class="barm"><i style="width:'+pct.toFixed(1)+'%"></i></div></td></tr>';
+  }
+  h += '</tbody></table></div>';
+  return h;
+}
+
+/* ═══════════ 彩色相机信息 ═══════════
+   画面涉及现场，所以三件事是硬要求：
+     ① 登录才给看（服务端判，不靠前端的锁）
+     ② 水印烧进 canvas —— 盖 div 的话右键另存为拿到的是干净原图
+     ③ 连车时往车端写一条访问记录，事后可追溯
+   取帧走轮询单帧 JPEG：与状态监控同一节奏，实现简单可靠；
+   不做 MJPEG 长流，避免和 /api/stat 抢同一条连接。 */
+const RGB = {built:false, on:false, cams:[], timer:0,
+             gate:false, user:'', cells:{}, starting:false,
+             /* 每台相机的旋转角各自记一份：斜着装的相机需要摆正，
+                而同一台车上的几台相机安装角度往往不一样。 */
+             rot:{}};
+
+function rgbTopic(c){
+  return '/camera_' + (c < 10 ? '0' + c : c) + '/color/image_raw';
+}
+
+/* ── 画面水印 ──
+   为什么烧进 canvas 而不是盖一层 div：盖 div 的话右键「图片另存为」
+   存下来的是干净原图，水印等于白加。烧进 canvas 后，另存 / 截图 /
+   翻拍拿到的都是带水印的那一份。
+   内容 = 账号 + 目标机器 + 本机时间：万一外传，能追到人和时间。 */
+function wmUserRGB(){ return (RGB.user || '').trim() || '未登录'; }
+function wmTargetRGB(){
+  try { return (($('host').value || '').trim() + ':' + ($('port').value || '').trim()); }
+  catch(e){ return ''; }
+}
+function wmTimeRGB(){
+  const d = new Date(), p = n => (n < 10 ? '0' : '') + n;
+  return d.getFullYear() + '-' + p(d.getMonth()+1) + '-' + p(d.getDate())
+       + ' ' + p(d.getHours()) + ':' + p(d.getMinutes()) + ':' + p(d.getSeconds());
+}
+/* 单独拎成函数是为了能测：传一个假 ctx 进去就能断言到底画了什么。 */
+function drawWatermark(ctx, w, h, opt){
+  const o = opt || {};
+  const user = o.user || '未登录';
+  let line = [user, o.target || '', o.time || ''].filter(Boolean).join(' · ');
+  ctx.save();
+  try {
+    // ① 满屏斜纹：只盖一个角的话，裁一下就没了
+    if (o.tile !== false && w > 40 && h > 40){
+      const fs = Math.max(11, Math.round(Math.min(w, h) / 20));
+      ctx.globalAlpha = 0.18;
+      ctx.fillStyle = '#ffffff';
+      ctx.font = fs + 'px "Segoe UI","Microsoft YaHei",sans-serif';
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'middle';
+      const txt = user + (o.time ? '  ' + o.time : '');
+      const span = Math.ceil(Math.sqrt(w * w + h * h));
+      /* 平铺间距必须按【文字实际宽度】算，不能按画布比例：
+         文字往往比 w/3 更宽，按比例排会让相邻两条叠在一起。 */
+      const twm = (ctx.measureText ? ctx.measureText(txt).width
+                                   : txt.length * fs * 0.6);
+      const sx = Math.max(120, Math.round(twm + Math.max(48, fs * 2)));
+      const sy = Math.max(Math.round(fs * 5), Math.round(h / 4));
+      ctx.translate(w / 2, h / 2);
+      ctx.rotate(-Math.PI / 9);
+      for (let y = -span; y <= span; y += sy)
+        for (let x = -span; x <= span; x += sx)
+          ctx.fillText(txt, x, y);
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+    }
+    // ② 右下角实心标签：缩成缩略图后仍能一眼看清是谁
+    const fs2 = Math.max(11, Math.round(Math.min(w, h) / 22));
+    ctx.font = fs2 + 'px "Segoe UI","Microsoft YaHei",sans-serif';
+    ctx.textAlign = 'right';
+    ctx.textBaseline = 'bottom';
+    const pad = Math.max(4, Math.round(fs2 / 2));
+    const mt = t => (ctx.measureText ? ctx.measureText(t).width : t.length * fs2 * 0.6);
+    // 窄画面上太长会顶出左边界被裁，逐级裁剪：账号无论如何要留住
+    const maxW = w - pad * 4;
+    if (mt(line) > maxW) line = [user, o.time || ''].filter(Boolean).join(' · ');
+    if (mt(line) > maxW) line = user;
+    const tw = mt(line);
+    ctx.globalAlpha = 0.55;
+    ctx.fillStyle = '#000000';
+    ctx.fillRect(w - tw - pad * 2, h - fs2 - pad * 2, tw + pad * 2, fs2 + pad * 2);
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = '#7ee787';
+    ctx.fillText(line, w - pad, h - pad);
+  } finally {
+    ctx.restore();
+  }
+}
+
+function ensureRGBBox(){
+  const box = $('rgbbox');
+  if (!box || box.dataset.built === '1') return;
+  box.innerHTML = '<div class="card"><h2>彩色相机信息</h2>'
+    + '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;'
+    +   'margin-bottom:6px">'
+    +   '<span class="dim" style="font-size:11px">相机</span>'
+    +   [1,2,3,4,5].map(function(i){
+          return '<label class="dim" style="font-size:11px;display:flex;'
+               + 'align-items:center;gap:3px"><input type="checkbox" '
+               + 'class="rgbcam" value="' + i + '" style="width:auto;margin:0">'
+               + '<span>' + (i<10?'0'+i:i) + '</span></label>';
+        }).join('')
+    +   '<button id="rgbgo" class="sec" style="flex:0 0 auto">开始预览</button>'
+    +   '<button id="rgbstop" class="sec" style="flex:0 0 auto">停止</button>'
+    +   '<details class="advanced"><summary>高级参数 · 画面尺寸与帧率</summary>'
+    +   '<div><span class="dim" style="font-size:10.5px">'
+    +     '最大宽度 <input id="rgbw" type="number" value="640" min="160" '
+    +       'step="80" style="width:62px;font-size:10.5px;padding:1px 4px"></span>'
+    +   '<span class="dim" style="font-size:10.5px">'
+    +     '帧率 <input id="rgbfps" type="number" value="5" min="1" max="15" '
+    +       'step="1" style="width:48px;font-size:10.5px;padding:1px 4px"></span></div></details>'
+    +   '<span class="dim" style="font-size:10.5px">'
+    +     '（画面走独立 SSH；关掉会真退订，不留车上进程）</span>'
+    + '</div>'
+    + '<div id="rgblogin" style="display:none;padding:10px;border:1px solid '
+    +   'var(--warn);border-radius:6px;background:rgba(255,193,7,.08);'
+    +   'margin-bottom:8px">'
+    +   '<div style="font-size:12px;color:var(--warn);margin-bottom:6px">'
+    +     '看相机画面需要先登录账号</div>'
+    +   '<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">'
+    +     '<input id="rgbuser" placeholder="账号" autocomplete="username" '
+    +       'style="flex:1 1 120px">'
+    +     '<input id="rgbpwd" type="password" placeholder="密码" '
+    +       'autocomplete="current-password" style="flex:1 1 120px">'
+    +     '<button id="rgbloginbtn" style="flex:0 0 auto">登录</button>'
+    +   '</div>'
+    +   '<div id="rgbloginerr" class="dim" style="font-size:11px;'
+    +     'margin-top:5px;color:var(--err)"></div>'
+    + '</div>'
+    + '<div id="rgbgrid" class="rgbgrid"></div>'
+    + '<div id="rgbmsg" class="dim" style="font-size:11px;margin-top:6px"></div>'
+    + '</div>';
+  box.dataset.built = '1';
+  $('rgbgo').onclick = rgbStart;
+  $('rgbstop').onclick = rgbStop;
+  $('rgbloginbtn').onclick = rgbLogin;
+  ['rgbuser','rgbpwd'].forEach(function(id){
+    const el = $(id);
+    if (el) el.addEventListener('keydown', function(e){
+      if (e.key === 'Enter') rgbLogin();
+    });
+  });
+}
+
+function rgbMsg(t, kind){
+  const el = $('rgbmsg');
+  if (!el) return;
+  el.textContent = t || '';
+  el.style.color = kind === 'err' ? 'var(--err)'
+                 : (kind === 'warn' ? 'var(--warn)' : '');
+}
+
+function rgbLogin(){
+  const u = ($('rgbuser').value || '').trim();
+  const p = $('rgbpwd').value || '';
+  if (!u){ rgbMsg('请填账号', 'warn'); return; }
+  fetch('/api/rgb_login', {method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({user:u, pwd:p})})
+    .then(function(r){ return r.json(); })
+    .then(function(j){
+      if (j && j.ok){
+        RGB.user = j.user || u;
+        $('rgblogin').style.display = 'none';
+        rgbMsg('已登录：' + RGB.user);
+      } else {
+        rgbMsg((j && j.err) || '登录失败', 'err');
+      }
+    })
+    .catch(function(e){ rgbMsg('登录请求失败：' + e, 'err'); });
+}
+
+/* 门禁状态：决定要不要显示登录框。门禁没启用就不需要登录。 */
+function rgbSyncGate(){
+  fetch('/api/rgb_state').then(function(r){ return r.json(); })
+    .then(function(j){
+      RGB.gate = !!(j && j.gate);
+      RGB.user = (j && j.user) || '';
+      const box = $('rgblogin');
+      if (box) box.style.display = (RGB.gate && !RGB.user) ? 'block' : 'none';
+      rgbMsg(RGB.gate
+        ? (RGB.user ? '已登录：' + RGB.user : '需要登录后才能看画面')
+        : '（门禁未启用，画面免登录）');
+    })
+    .catch(function(){});
+}
+
+function rgbSelected(){
+  const out = [];
+  document.querySelectorAll('.rgbcam').forEach(function(el){
+    if (el.checked) out.push(parseInt(el.value, 10));
+  });
+  return out;
+}
+
+/* 旋转后的画布尺寸：90 / 270 度要互换宽高，否则画面会被拉扁或留黑边。
+   单独拎成函数是为了能测 —— 传宽高和角度就能断言，不用真建 canvas。 */
+function rgbRotSize(w, h, rot){
+  const r = ((rot | 0) % 360 + 360) % 360;
+  return (r === 90 || r === 270) ? {w: h, h: w} : {w: w, h: h};
+}
+
+/* 把一帧画进 canvas：先定画布尺寸，再按角度旋转画帧，最后烧水印。
+   三步顺序都不能动：
+     ① cv.width 一赋值就把画布清空了，所以必须在画任何东西之前设；
+     ② 水印必须在旋转【之后】画 —— 放进 rotate 里的话水印会跟着画面躺倒，
+        斜着装的那台相机看水印得歪着头看。 */
+function rgbDrawFrame(cv, ctx, img, rot, wmOpt){
+  const r = ((rot | 0) % 360 + 360) % 360;
+  const sz = rgbRotSize(img.width, img.height, r);
+  cv.width = sz.w; cv.height = sz.h;
+  ctx.save();
+  try {
+    if (r === 90){
+      ctx.translate(sz.w, 0); ctx.rotate(Math.PI / 2);
+    } else if (r === 180){
+      ctx.translate(sz.w, sz.h); ctx.rotate(Math.PI);
+    } else if (r === 270){
+      ctx.translate(0, sz.h); ctx.rotate(-Math.PI / 2);
+    }
+    ctx.drawImage(img, 0, 0);
+  } finally {
+    ctx.restore();
+  }
+  drawWatermark(ctx, cv.width, cv.height, wmOpt || {});
+}
+
+function rgbCells(cams){
+  const g = $('rgbgrid');
+  if (!g) return;
+  g.innerHTML = '';
+  RGB.cells = {};
+  cams.forEach(function(c){
+    const d = document.createElement('div');
+    d.className = 'rgbcell';
+    const nm = (c < 10 ? '0' + c : '' + c);
+    const cur = RGB.rot[c] || 0;
+    // 旋转下拉放右上角，和左上角的相机号错开。某些相机是斜着装的，
+    // 摆正了看着才舒服；每台相机各自记一个角度。
+    d.innerHTML = '<div class="tag">相机 ' + nm + '</div>'
+      + '<select class="rgbrot" title="画面旋转" style="position:absolute;'
+      +   'right:4px;top:3px;z-index:2;width:auto;font-size:10.5px;'
+      +   'padding:0 2px;background:rgba(0,0,0,.55);color:var(--acc);'
+      +   'border:1px solid var(--line);border-radius:3px">'
+      +   [0, 90, 180, 270].map(function(a){
+            return '<option value="' + a + '"'
+                 + (a === cur ? ' selected' : '') + '>' + a + '°</option>';
+          }).join('')
+      + '</select>'
+      + '<canvas width="640" height="360"></canvas>';
+    g.appendChild(d);
+    const cv = d.querySelector('canvas');
+    const ctx = cv.getContext('2d');
+    ctx.fillStyle = '#0a0f18';
+    ctx.fillRect(0, 0, cv.width, cv.height);
+    ctx.fillStyle = '#5b7fa6';
+    ctx.font = '13px "Segoe UI","Microsoft YaHei",sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('等待画面… ' + rgbTopic(c), cv.width/2, cv.height/2);
+    RGB.cells[c] = {cv: cv, ctx: ctx, n: 0, err: '', rot: cur, img: null};
+    const sel = d.querySelector('.rgbrot');
+    if (sel) sel.onchange = function(){
+      const v = parseInt(sel.value, 10) || 0;
+      RGB.rot[c] = v;
+      const cell = RGB.cells[c];
+      if (!cell) return;
+      cell.rot = v;
+      // 立刻用最后一帧重绘，不用等下一帧到（220ms 一帧，等得起但没必要）
+      if (cell.img){
+        try { rgbDrawFrame(cell.cv, cell.ctx, cell.img, v, wmOptRGB()); }
+        catch(e){ cell.err = '重绘失败：' + (e && e.message ? e.message : e); }
+      }
+    };
+  });
+}
+
+function wmOptRGB(){
+  return {user: wmUserRGB(), target: wmTargetRGB(), time: wmTimeRGB()};
+}
+
+/* 清空格子前回收上一帧的 object URL —— 为了改旋转角能立刻重绘，
+   上一帧的 URL 是延后回收的，这里不收就会一直攒着。 */
+function rgbRelease(){
+  Object.keys(RGB.cells || {}).forEach(function(k){
+    const c = RGB.cells[k];
+    if (c && c.prevUrl){ try { URL.revokeObjectURL(c.prevUrl); } catch(e){} }
+  });
+}
+
+function rgbStart(){
+  const cams = rgbSelected();
+  if (!cams.length){ rgbMsg('请先勾选至少一路相机', 'warn'); return; }
+  if (RGB.gate && !RGB.user){ rgbMsg('请先登录账号', 'warn'); return; }
+  RGB.starting = true;
+  rgbMsg('正在启动车端取图…');
+  fetch('/api/rgb', {method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({on:true, cams:cams,
+              width: parseInt(($('rgbw')||{}).value || 640, 10),
+              fps: parseFloat(($('rgbfps')||{}).value || 5)})})
+    .then(function(r){ return r.json(); })
+    .then(function(j){
+      RGB.starting = false;
+      if (!j || !j.ok){
+        if (j && j.needLogin){ RGB.gate = true; rgbSyncGate(); }
+        rgbMsg((j && j.err) || '启动失败', 'err');
+        return;
+      }
+      RGB.on = true;
+      RGB.cams = j.cams || cams;
+      rgbCells(RGB.cams);
+      rgbMsg('已开启相机 ' + RGB.cams.join('、') + '（' + (j.note||'') + '）');
+      if (!RGB.timer) RGB.timer = setInterval(rgbTick, 220);
+    })
+    .catch(function(e){
+      RGB.starting = false;
+      rgbMsg('启动请求失败：' + e, 'err');
+    });
+}
+
+function rgbStop(){
+  fetch('/api/rgb', {method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({on:false, cams:[]})})
+    .then(function(r){ return r.json(); })
+    .then(function(){
+      RGB.on = false;
+      RGB.cams = [];
+      if (RGB.timer){ clearInterval(RGB.timer); RGB.timer = 0; }
+      const g = $('rgbgrid');
+      if (g) g.innerHTML = '';
+      rgbRelease();
+      RGB.cells = {};
+      rgbMsg('已停止（车端取图进程已清理）');
+    })
+    .catch(function(e){ rgbMsg('停止失败：' + e, 'err'); });
+}
+
+function rgbTick(){
+  if (!RGB.on) return;
+  RGB.cams.forEach(function(c){ rgbFetch(c); });
+}
+
+function rgbFetch(cam){
+  const cell = RGB.cells[cam];
+  if (!cell || cell.busy) return;      // 上一帧还没回来就不再发，避免堆积
+  cell.busy = true;
+  fetch('/api/rgb_frame?cam=' + cam + '&t=' + Date.now(), {cache:'no-store'})
+    .then(function(r){
+      const ct = (r.headers.get('Content-Type') || '');
+      if (ct.indexOf('image') >= 0) return r.blob().then(function(b){
+        return {img: b};
+      });
+      return r.json().then(function(j){ return {j: j}; });
+    })
+    .then(function(res){
+      cell.busy = false;
+      if (res.j){
+        // 不是图：等待画面 / 需要登录 / 该路未开启
+        if (res.j.needLogin){ RGB.gate = true; rgbSyncGate(); }
+        cell.err = res.j.err || '';
+        const dg = res.j.diag || null;
+        const lines = [];
+        lines.push(cell.err || '等待画面…');
+        if (dg){
+          if (dg.topic) lines.push('话题 ' + dg.topic);
+          if (dg.exit !== null && dg.exit !== undefined
+              && dg.exit !== '') lines.push('车端脚本已退出 exit=' + dg.exit);
+          else if (!dg.n) lines.push('车端脚本在跑，但该话题没有数据');
+          const tl = dg.tail || [];
+          for (let i = Math.max(0, tl.length - 3); i < tl.length; i++){
+            lines.push('车端: ' + tl[i]);
+          }
+        }
+        rgbCellMsg(cell, lines);
+        return;
+      }
+      const url = URL.createObjectURL(res.img);
+      const img = new Image();
+      img.onload = function(){
+        try {
+          // 按该相机的旋转角度画；90 / 270 时画布宽高会自动互换
+          rgbDrawFrame(cell.cv, cell.ctx, img, cell.rot || 0, wmOptRGB());
+          cell.img = img;              // 留着，改旋转角时立刻重绘用
+          if (cell.prevUrl){ try { URL.revokeObjectURL(cell.prevUrl); } catch(e){} }
+          cell.prevUrl = url;          // 下一帧再回收，重绘时图片还有效
+          cell.n++;
+          cell.err = '';
+        } catch(e){
+          cell.err = '绘制失败：' + (e && e.message ? e.message : e);
+          URL.revokeObjectURL(url);
+        }
+      };
+      img.onerror = function(){
+        URL.revokeObjectURL(url);
+        cell.err = '画面解码失败';
+      };
+      img.src = url;
+    })
+    .catch(function(e){
+      cell.busy = false;
+      rgbCellMsg(cell, '取帧失败：' + e);
+    });
+}
+
+function rgbCellMsg(cell, t){
+  try {
+    const cv = cell.cv, ctx = cell.ctx;
+    const lines = Array.isArray(t) ? t : [t];
+    ctx.fillStyle = '#0a0f18';
+    ctx.fillRect(0, 0, cv.width, cv.height);
+    ctx.textAlign = 'center';
+    const y0 = cv.height/2 - (lines.length - 1) * 9 + 4;
+    lines.slice(0, 5).forEach(function(s, i){
+      ctx.fillStyle = i === 0 ? '#8fb4d9' : '#5b7fa6';
+      ctx.font = (i === 0 ? '13px' : '11px')
+               + ' "Segoe UI","Microsoft YaHei",sans-serif';
+      ctx.fillText(String(s).slice(0, 64), cv.width/2, y0 + i * 18);
+    });
+  } catch(e){}
+}
+
+function render(d){
+  renderOverview(d);
+  const wrap = $('sum');
+  if (!d){
+    wrap.innerHTML = '<div class="card"><div class="empty">未连接机器，请展开顶部连接配置，填写主机与端口后点击连接。</div></div>';
+    $('tables').innerHTML = '';
+    $('vers').innerHTML = '';
+    $('hw').innerHTML = '';
+    $('faults').innerHTML = '';
+    $('tasks').innerHTML = '';
+    $('nav').innerHTML = '';
+    $('axslam').innerHTML = '';
+    $('map').innerHTML = '';
+    $('map').dataset.built = '';
+    S.mapName = '';
+    S.lastScan = null;
+    S.lastD2l = null;
+    PC3.pts = null;
+    PC3.meta = null;
+    $('disk').innerHTML = '';
+    $('ctlist').innerHTML = '';
+    return;
+  }
+  const memPct = d.mem_total ? d.mem_used / d.mem_total * 100 : 0;
+  wrap.innerHTML =
+      '<div class="kv"><div class="k">整机 CPU</div><div class="v">'+(d.cpu||0)+'%</div>'
+    + barPct(d.cpu) + '<div class="s">整机占用 · 单核 100%</div></div>'
+    + '<div class="kv"><div class="k">内存</div><div class="v">'+memPct.toFixed(0)+'%</div>'
+    + barPct(memPct) + '<div class="s">'+d.mem_used+' / '+d.mem_total+' MB</div></div>'
+    + '<div class="kv"><div class="k">进程数</div><div class="v">'+(d.nproc||0)+'</div>'
+    + '<div class="s">'+esc(d.host||'-')+'</div></div>'
+    // 系统负载单独一格。原来它挤在 CPU 那格底下当小字，三个数连在一起
+    // 很容易看成 CPU 的一部分；单独显示后一眼能分出「瞬时占用」和
+    // 「一段时间的排队长度」，卡顿时两者对比才有意义。
+    + '<div class="kv"><div class="k">系统负载</div><div class="v" style="font-size:14px">'
+    +   ((d.load||[]).map(function(x){ return (+x).toFixed(2); }).join(' / ')||'-')
+    + '</div><div class="s">1 / 5 / 15 分钟平均</div></div>'
+    + '<div class="kv"><div class="k">开机时长</div><div class="v" style="font-size:15px">'+fmtUp(d.up)+'</div>'
+    + '<div class="s">'+(d.boot_ts ? '开机于 '+fmtBoot(d.boot_ts)+' · ' : '')
+    + '采集于 '+new Date(d.t*1000).toLocaleTimeString('zh-CN')+'</div></div>'
+    + thermalCell(d.thermal) + freqCell(d.freq);
+
+  // 每一块单独包 try/catch：任何一块渲染出错只影响它自己那一栏，
+  // 其余照常刷新。不做隔离的话，一个 NotDefined 就会让整页停止更新，
+  // 还会把状态栏误报成「服务未运行」（v1.0.53 就是这么栽的）。
+  safe('TOP5', function(){
+    $('tables').innerHTML =
+        tbl('CPU 占用 TOP 5', (d.top_cpu||[]), 'cpu', '%CPU（单核 100%）')
+      + tbl('内存占用 TOP 5', (d.top_mem||[]), 'rss',
+            'MB / 占整机 %', d.mem_total || 0);
+  });
+  safe('任务状态', function(){ renderTasks(d); });
+  safe('导航', function(){ renderNav(d.nav, d.odom, d.nav_verdict); });
+  safe('定位', function(){ renderAxslam(d.axslam); });
+  safe('地图', function(){ renderMap(d.map); });
+  safe('雷达点云', function(){ drawScan(d.scan, d.d2l); });
+  safe('深度点云', function(){ drawPC3D(d.pc3d); });
+  safe('彩色相机', function(){ ensureRGBBox(); });
+  safe('磁盘', function(){ renderDisk(d.disk); });
+  safe('自定义话题', function(){ renderCustom(d.custom); });
+  safe('采集脚本版本', function(){ renderAgentVer(d.agent_ver); });
+  safe('版本信息', function(){ renderVers(d); });
+  safe('硬件状态', function(){ renderHw(d.hw); });
+  safe('故障', function(){ renderFaults(d.faults); });
+  safe('频率', function(){ markHz(d.hz); });
+}
+/* 单块渲染的隔离壳。出错时：
+     · 控制台留完整堆栈，便于定位
+     · 页面底部「渲染异常」区列出哪块坏了，不影响其它栏
+     · 绝不向上冒泡 —— 冒泡会让上层 catch 把它当成网络失败 */
+function safe(name, fn){
+  try { fn(); }
+  catch(e){
+    try { console.error('[render] ' + name + ' 渲染失败：', e); } catch(_){}
+    try {
+      const el = $('rerr');
+      if (el){
+        el.style.display = 'block';
+        el.textContent = '渲染异常：' + name + ' —— ' + (e && e.message ? e.message : e)
+                       + '（其余栏目不受影响）';
+      }
+    } catch(_){}
+  }
+}
+
+/* ── 版本信息 ──
+   三个来源各不相同，所以放在同一栏里对照着看：
+     · 软件版本 —— 车上 version.yaml 文件（不是话题，采集脚本直接读）
+     · 固件版本 —— /hardware_state 的 Version 字段
+     · SLAM版本 —— /slam_a_status 的 sw_version 字段
+   任一来源取不到只影响它自己那一格，另外两个照常显示。 */
+function num(v){
+  const n = parseFloat(v);
+  return isFinite(n) ? n : null;
+}
+function hwCell(k, v, unit, cls){
+  return '<div class="hwcell"><div class="hwk">' + esc(k) + '</div>'
+       + '<div class="hwv ' + (cls||'') + '">' + esc(v)
+       + (unit ? '<span class="hwu">' + esc(unit) + '</span>' : '')
+       + '</div></div>';
+}
+
+function hasVal(v){ return !(v === '' || v === null || v === undefined); }
+
+/* 温度：工控机夏天降频、死机前往往先升温，是唯一能提前看到的信号。 */
+function thermalCell(th){
+  if (!th) return '';
+  if (!th.ok){
+    return '<div class="kv"><div class="k">CPU 温度</div>'
+         + '<div class="v" style="font-size:13px">-</div>'
+         + '<div class="s">' + esc(th.err || '未取到') + '</div></div>';
+  }
+  const c = th.c;
+  const cls = c >= 85 ? 'bad' : (c >= 75 ? 'warn' : 'good');
+  return '<div class="kv"><div class="k">CPU 温度</div>'
+       + '<div class="v ' + cls + '">' + c + ' °C</div>'
+       + '<div class="s">' + esc(th.src || '') + '</div></div>';
+}
+
+/* 频率：降频是温度过高 / 电源策略的直接后果，要和温度对着看 */
+function freqCell(fq){
+  if (!fq) return '';
+  if (!fq.ok){
+    return '<div class="kv"><div class="k">CPU 频率</div>'
+         + '<div class="v" style="font-size:13px">-</div>'
+         + '<div class="s">' + esc(fq.err || '未取到') + '</div></div>';
+  }
+  const low = (fq.max && fq.mhz < fq.max * 0.6);
+  return '<div class="kv"><div class="k">CPU 频率</div>'
+       + '<div class="v ' + (low ? 'warn' : '') + '" style="font-size:17px">'
+       + fq.mhz + '<span class="hwu"> MHz</span></div>'
+       + '<div class="s">' + (fq.max ? '最大 ' + fq.max + ' MHz · ' : '')
+       + (fq.n || 0) + ' 核'
+       + (low ? ' · 已降频' : '') + '</div></div>';
+}
+
+function verCell(k, v, cls, sub){
+  return '<div class="hwcell"><div class="hwk">' + esc(k) + '</div>'
+       + '<div class="hwv ' + (cls||'') + '" style="font-size:13.5px;font-weight:700">'
+       + (hasVal(v) ? esc(String(v)) : '-') + '</div>'
+       + '<div class="hwk" style="margin-top:4px">'
+       + (hasVal(sub) ? esc(String(sub)) : '') + '</div></div>';
+}
+
+/* 一个来源的状态说明：优先显示"为什么没拿到"，而不是干巴巴一个 - */
+function srcNote(o, okNote, waitNote){
+  if (!o) return '未连接';
+  if (o.err) return o.err;
+  if (!o.ok) return '未获取到';
+  return waitNote ? waitNote : okNote;
+}
+
+/* ── 任务状态 ──
+   两个来源，各自独立：任一话题没发布，只影响它自己那一块。
+     · 当前任务 —— /online_task_single 的 task_echo
+     · 任务队列 —— /online_tasks_deque 的 taskgroup_list（按发布顺序竖排）
+   状态码 → 中文的映射由车端定义（0未知 1空闲 2执行中 11暂停 12阻塞
+   21结束 23取消 24终止 25补充清扫 100异常），前端照抄不做推断。 */
+function toneCls(t){ return t === 'ok' ? 'ok' : (t === 'warn' ? 'warn' : (t === 'bad' ? 'err' : '')); }
+
+function renderTasks(d){
+  const box = $('tasks');
+  if (!d){ box.innerHTML = ''; return; }
+  const tk = d.task || {};
+  const q  = d.queue || {};
+
+  let h = '<div class="card"><h2>任务状态</h2>';
+
+  /* ── 当前任务 ── */
+  h += '<div style="font-size:12px" class="dim">当前任务（'
+     + esc(tk.topic || '/online_task_single') + '）</div>';
+  if (!tk.ok || tk.err){
+    h += '<div class="dim" style="font-size:11.5px">'
+       + esc(tk.err || '正在订阅话题…') + '</div>';
+  }else if (!hasVal(tk.name) && tk.status == null){
+    h += '<div class="dim" style="font-size:11.5px">话题已订阅，暂无消息</div>';
+  }else{
+    const tone = tk.statusTone || '';
+    const e = tk.echo || {};
+    // 阻塞要单独说一句：暂停是人点的，阻塞是机器自己进的（手动/急停/故障），
+    // 两者都"停着"但性质完全不同，值班的人判断依据不一样。
+    const blocked = (parseInt(tk.status, 10) === 12);
+    h += '<div class="kv"><div class="k">任务</div><div class="v" style="font-size:15px">'
+       + esc(tk.name || '-') + '</div>'
+       + '<div class="s"><span class="' + toneCls(tone) + '">'
+       + esc(tk.statusText || '-') + '</span>'
+       + (tk.status != null ? '（状态码 ' + esc(String(tk.status)) + '）' : '')
+       + '</div></div>';
+    if (blocked){
+      h += '<div class="err" style="font-size:11.5px;margin-top:2px">'
+         + '阻塞：机器自动判断（进入手动 / 急停 / 故障）</div>';
+    }
+    const prog = num(e.progress);
+    if (prog != null){
+      h += '<div class="kv"><div class="k">进度</div><div class="v">'
+         + (prog * (prog <= 1 ? 100 : 1)).toFixed(0) + '%</div>'
+         + progBar(prog <= 1 ? prog * 100 : prog) + '</div>';
+    }
+    const cells = [];
+    if (hasVal(e.task_id))          cells.push(hwCell('任务 ID', String(e.task_id), ''));
+    if (hasVal(e.start_time))       cells.push(hwCell('开始时间', String(e.start_time), ''));
+    if (hasVal(e.end_time))         cells.push(hwCell('结束时间', String(e.end_time), ''));
+    if (num(e.cleaned_area) != null) cells.push(hwCell('已清扫', num(e.cleaned_area).toFixed(1), 'm²'));
+    if (num(e.working_time) != null) cells.push(hwCell('已用时', fmtSec(num(e.working_time)), ''));
+    if (num(e.real_travel_dist) != null) cells.push(hwCell('里程', num(e.real_travel_dist).toFixed(1), 'm'));
+    if (num(e.avoidance_obstacle_number) != null) cells.push(hwCell('避障次数', String(num(e.avoidance_obstacle_number)), ''));
+    if (num(e.extrication_number) != null) cells.push(hwCell('脱困次数', String(num(e.extrication_number)), ''));
+    const ec = (e.error_code && typeof e.error_code === 'object') ? e.error_code : {};
+    if (num(ec.error_code))         cells.push(hwCell('错误码', '0x' + parseInt(ec.error_code,10).toString(16).padStart(4,'0'), ''));
+    if (cells.length) h += '<div class="hwgrid">' + cells.join('') + '</div>';
+  }
+
+  /* ── 任务队列：竖排，当前任务那一行高亮 ── */
+  h += '<div style="margin-top:10px;font-size:12px" class="dim">任务队列（'
+     + esc(q.topic || '/online_tasks_deque') + '）</div>';
+  if (!q.ok || q.err){
+    h += '<div class="dim" style="font-size:11.5px">'
+       + esc(q.err || '正在订阅话题…') + '</div>';
+  }else if (!q.groups || !q.groups.length){
+    h += '<div class="dim" style="font-size:11.5px">队列为空</div>';
+  }else{
+    const curName = tk.name || '';
+    h += '<div class="qlist">';
+    q.groups.forEach((g, i) => {
+      const on = curName && g.name === curName;
+      let sub = [];
+      if (g.area != null) sub.push(g.area + ' m²');
+      if (g.est != null)  sub.push('预计 ' + fmtSec(g.est));
+      h += '<div class="qrow' + (on ? ' qon' : '') + '">'
+         + '<span class="qidx">' + (i + 1) + '</span>'
+         + '<span class="qnm">' + esc(g.name) + '</span>'
+         + (on ? '<span class="qtag">当前</span>' : '')
+         + (sub.length ? '<span class="dim" style="font-size:11px">'
+            + esc(sub.join(' · ')) + '</span>' : '')
+         + '</div>';
+    });
+    h += '</div>';
+  }
+  h += '</div>';
+  box.innerHTML = h;
+}
+
+/* ── 导航状态 /cmd_vel ──
+   这个话题只在【下发控制指令时】才发布，机器静止时一条都没有。
+   所以不能一律显示 0 —— 那会让人分不清"机器正静止"和"根本没数据"。
+   三种情况要分开说：
+     1) 正在发布          -> 线速度 / 角速度实时值，标「正在发布」
+     2) 停发但留有上次值  -> 保留上次值，标「已停止发布 N 秒」
+     3) 话题压根没发布    -> 明说「当前无控制指令」
+   角速度额外给 °/s：车端是弧度，但现场说"每秒转多少度"更直观。 */
+function navDir(lx, az){
+  /* 方向由符号判断（右手系：angular.z > 0 为逆时针 / 左转）。
+     只是辅助读数，阈值以下一律算静止，不参与任何控制判断。 */
+  const T = 0.01;
+  const f = Math.abs(lx) < T ? '' : (lx > 0 ? '前进' : '后退');
+  const t = Math.abs(az) < T ? '' : (az > 0 ? '左转' : '右转');
+  if (!f && !t) return '静止';
+  return [f, t].filter(Boolean).join(' · ');
+}
+
+/* ── 车端采集脚本版本 ──
+   脚本源码是 PC 端经 SSH 下发到车上执行的，车上不留文件。所以页面显示
+   的是新功能、车上跑的是旧脚本，这种"改了没生效"最难查。这里把两者
+   版本号摆在一起比对，不一致就直接告诉用户去重启本地服务。 */
+function renderAgentVer(v){
+  const box = $('agentver');
+  if (!box) return;
+  if (!v){
+    box.innerHTML = '<span class="warn">车端采集脚本：旧版（未报版本号）'
+                  + ' —— 请重启本地服务</span>';
+    return;
+  }
+  if (String(v) !== String(PAGE_VER)){
+    box.innerHTML = '<span class="warn">车端采集脚本 v' + esc(v)
+                  + ' ≠ 页面 v' + esc(PAGE_VER)
+                  + ' —— 请断开、关掉 8766 黑窗口、重新点卡片再连接</span>';
+    return;
+  }
+  box.innerHTML = '车端采集脚本 v' + esc(v) + '（与页面一致）';
+}
+
+function fmtSpd(v){ return v == null ? '-' : Number(v).toFixed(3); }
+
+/* 期望 / 实际 各一格。两边必须并排看 —— 见 nav_verdict 的说明。 */
+function navBox(title, st){
+  if (!st){
+    return '<div class="navbox"><div class="nbk">' + esc(title) + '</div>'
+         + '<div class="dim" style="font-size:11.5px">未获取到'
+         + '（采集脚本可能是旧版）</div></div>';
+  }
+  let h = '<div class="navbox"><div class="nbk">' + esc(title) + ' · '
+        + esc(st.topic || '') + '</div>';
+  const lx = (st.lin_x == null) ? null : num(st.lin_x);
+  const az = (st.ang_z == null) ? null : num(st.ang_z);
+  if (!st.ok && st.err){
+    h += '<div class="dim" style="font-size:11.5px">' + esc(st.err) + '</div>';
+  }else if (lx == null && az == null){
+    h += '<div class="dim" style="font-size:11.5px">话题已订阅，暂无消息</div>';
+  }else{
+    h += '<div class="navbig">' + fmtSpd(lx) + '<span class="hwu"> m/s</span></div>';
+    h += '<div class="dim" style="font-size:11.5px">角速度 ' + fmtSpd(az)
+       + ' rad/s' + (az == null ? '' : ' （' + (az * 180 / Math.PI).toFixed(1)
+       + ' °/s）') + '</div>';
+    h += '<div class="dim" style="font-size:11.5px">方向 '
+       + esc(navDir(lx || 0, az || 0)) + '（按符号判断）</div>';
+    h += '<div class="dim" style="font-size:11px;margin-top:3px">'
+       + (st.live
+            ? '<span class="good">● 正在发布</span>'
+            : '<span class="warn">当前无控制指令（已停止发布'
+              + (st.age != null ? ' ' + st.age + ' 秒' : '')
+              + '，以上为最后一次的值）</span>')
+       + '</div>';
+  }
+  return h + '</div>';
+}
+
+function renderNav(n, od, vd){
+  const box = $('nav');
+  if (!box) return;
+  /* 服务端没给这个字段（= 车上跑的采集脚本是旧版）时，也必须把这一栏
+     画出来并说明原因。整栏悄悄消失的话，用户只会以为"压根没做这个
+     功能"，根本想不到是本地服务没重启 —— 其它几栏（版本/硬件/故障）
+     在字段缺失时都是照常渲染的，只有这里不能例外。 */
+  if (!n){
+    box.innerHTML = '<div class="card"><h2>导航状态</h2>'
+      + '<div class="warn" style="font-size:11.5px">未获取到导航状态数据'
+      + '（服务端没有返回该字段）。<br>多半是本地服务还是旧版：'
+      + '请关掉 8766 的黑窗口，重新点卡片启动后再连接。</div></div>';
+    return;
+  }
+  let h = '<div class="card"><h2>导航状态</h2><div class="navpair">'
+        + navBox('期望速度（控制指令）', n)
+        + navBox('实际速度（里程计）', od)
+        + '</div>';
+
+  /* "指令发了但车没动"：任务状态和 cmd_vel 此时都显示正常，
+     只有两边的差值能暴露问题，所以单独给一条显眼的告警。 */
+  if (vd && vd.stall){
+    h += '<div class="stall">⚠ 疑似卡住 —— 指令要求 ' + fmtSpd(vd.cmd)
+       + ' m/s，实际只有 ' + fmtSpd(vd.act) + ' m/s，已持续 ' + vd.sec
+       + ' 秒。<br>此时任务状态通常仍是「执行中」，请到现场确认是否'
+       + '被卡住 / 打滑 / 电机未响应。</div>';
+  }
+  h += '</div>';
+  box.innerHTML = h;
+}
+
+/* ── 定位状态 /ax_slam_state ──
+   定位飘了 / 丢了 / 重定位失败时，任务状态仍然是「执行中」，
+   但机器会走错路线甚至撞墙 —— 这类事故事后复盘往往要翻 bag 才知道，
+   所以必须能在面板上实时看到。 */
+function boolOf(v){
+  if (v === true || v === 'True' || v === 'true' || v === 1) return true;
+  if (v === false || v === 'False' || v === 'false' || v === 0) return false;
+  return null;
+}
+function yesno(v, clsTrue, clsFalse){
+  const b = boolOf(v);
+  if (b === null) return hwCellK('-', '');
+  return hwCellK(b ? '是' : '否', b ? (clsTrue || 'good') : (clsFalse || 'bad'));
+}
+/* 只给值，不给标题 —— 标题在调用处拼，避免同一个 hwCell 传两遍 */
+function hwCellK(v, cls){
+  return '<div class="hwv ' + (cls || '') + '" style="font-size:15px">'
+       + esc(String(v)) + '</div>';
+}
+
+function renderAxslam(a){
+  const box = $('axslam');
+  if (!box) return;
+  if (!a){
+    box.innerHTML = '<div class="card"><h2>定位状态</h2>'
+      + '<div class="warn" style="font-size:11.5px">未获取到定位状态数据'
+      + '（服务端没有返回该字段）。多半是本地服务还是旧版，'
+      + '请重启 8766 的本地服务后再连接。</div></div>';
+    return;
+  }
+  let h = '<div class="card"><h2>定位状态（'
+        + esc(a.topic || '/ax_slam_state') + '）</h2>';
+  if (!a.ok || a.err){
+    h += '<div class="dim" style="font-size:11.5px">'
+       + esc(a.err || '正在订阅话题…') + '</div></div>';
+    box.innerHTML = h;
+    return;
+  }
+  const f = a.fields || {};
+  const pq    = num(f.position_quality);
+  const score = num(f.lidar_matching_score);
+  const loss  = num(f.position_loss_progress);
+  const reloc = boolOf(f.relocating);
+  const rel   = boolOf(f.reliable);
+  const lid   = boolOf(f.lidar_reliable);
+  const slip  = boolOf(f.wheel_slipping);
+
+  const cells = [];
+  cells.push('<div class="hwcell"><div class="hwk">定位状态 state</div>'
+    + hwCellK((f.state == null ? '-' : f.state), 'cool') + '</div>');
+  cells.push('<div class="hwcell"><div class="hwk">定位可靠 reliable</div>'
+    + yesno(f.reliable, 'good', 'bad') + '</div>');
+  cells.push('<div class="hwcell"><div class="hwk">定位质量（满分 10）</div>'
+    + hwCellK(pq == null ? '-' : pq,
+              pq == null ? '' : (pq >= 7 ? 'good' : (pq >= 4 ? 'warn' : 'bad')))
+    + '</div>');
+  cells.push('<div class="hwcell"><div class="hwk">雷达匹配值</div>'
+    + hwCellK(score == null ? '-' : score.toFixed(3),
+              score == null ? '' : (score >= 0.5 ? 'good' : 'warn')) + '</div>');
+  cells.push('<div class="hwcell"><div class="hwk">重定位中</div>'
+    + yesno(f.relocating, 'bad', 'good') + '</div>');
+  cells.push('<div class="hwcell"><div class="hwk">雷达可靠</div>'
+    + yesno(f.lidar_reliable, 'good', 'bad') + '</div>');
+  cells.push('<div class="hwcell"><div class="hwk">打滑</div>'
+    + yesno(f.wheel_slipping, 'bad', 'good') + '</div>');
+  cells.push('<div class="hwcell"><div class="hwk">丢失进度</div>'
+    + hwCellK(loss == null ? '-' : loss.toFixed(2),
+              (loss != null && loss > 0) ? 'warn' : '') + '</div>');
+  h += '<div class="hwgrid">' + cells.join('') + '</div>';
+
+  if (reloc === true){
+    h += '<div class="warn" style="font-size:11.5px;margin-top:6px">'
+       + '正在重定位 —— 此期间定位结果不可信</div>';
+  }
+  if (rel === false || lid === false){
+    h += '<div class="err" style="font-size:11.5px;margin-top:6px">'
+       + '定位不可靠（reliable / lidar_reliable 为 false）：'
+       + '机器可能走错路线，建议现场确认</div>';
+  }
+  h += '</div>';
+  box.innerHTML = h;
+}
+
+/* ── 磁盘 ──
+   录 bag 的机器磁盘满是高频事故，而且一出事就是连锁反应：
+   roslaunch 起不来、日志写不进、系统卡死。 */
+function gb(mb){ return (Number(mb) / 1024).toFixed(1); }
+function humanBytes(n){
+  n = Number(n) || 0;
+  if (n >= 1073741824) return (n / 1073741824).toFixed(2) + ' GB';
+  if (n >= 1048576) return (n / 1048576).toFixed(1) + ' MB';
+  if (n >= 1024) return (n / 1024).toFixed(1) + ' KB';
+  return n + ' B';
+}
+/* ── 地图 ──
+   地图名来自 /map_info_v3 的 base_info.name（如 HGTV），PC 端拿它去
+   车上 /home/aoting/user_config/map_database/<name>/map.png 取图。
+   为什么图片不跟着每秒的轮询重下：PNG 动辄几 MB，每秒拉一次会把
+   SSH 通道和页面一起拖死。只在地图名变化、或用户点了加载时才取。 */
+function gpath(o, path){
+  let v = o;
+  for (const k of path){ if (v == null) return null; v = v[k]; }
+  return (v === undefined) ? null : v;
+}
+
+function renderMap(m){
+  const box = $('map');
+  if (!box) return;
+  if (!box.dataset.built){
+    box.innerHTML = '<div class="card"><h2>车辆位置及实时点云</h2>'
+      + '<div id="mapmeta" class="dim" style="font-size:11.5px"></div>'
+      + '<div id="mapviewport" style="margin-top:8px;overflow:hidden;'
+      +   'border-radius:6px;background:#05070c;cursor:grab">'
+      + '<div id="mapwrap" style="position:relative;display:inline-block;'
+      +   'line-height:0;transform-origin:0 0">'
+      +   '<img id="mapimg" alt="地图" style="display:none;max-width:100%">'
+      +   '<canvas id="mapcv" style="position:absolute;left:0;top:0;pointer-events:none"></canvas>'
+      + '</div>'
+      + '</div>'
+      + '<div id="maphidden" class="dim" style="display:none;font-size:11.5px;'
+      +   'margin-top:8px;padding:14px;text-align:center;'
+      +   'border:1px dashed var(--line);border-radius:6px">'
+      +   '地图已关闭 —— 点上方「显示地图」恢复</div>'
+      + '<div style="text-align:center;margin-top:6px">'
+      +   '<button id="mapzoomin" class="sec" style="flex:0 0 auto">放大</button>'
+      +   '<button id="mapzoomout" class="sec" style="flex:0 0 auto">缩小</button>'
+      +   '<button id="mapviewreset" class="sec" style="flex:0 0 auto">复位视图</button>'
+      +   '<button id="maptoggle" class="sec" style="flex:0 0 auto">关闭地图</button>'
+      +   '<label class="dim" style="font-size:10.5px;margin-left:6px;display:flex;'
+      +     'align-items:center;gap:4px;flex:0 0 auto">'
+      +     '<input type="checkbox" id="mapwheellock" style="width:auto;margin:0">'
+      +     '<span>滚轮缩放</span></label>'
+      +   '<span class="dim" style="font-size:10.5px;margin-left:6px">'
+      +     '（默认滚轮翻页不缩放，勾选后或按住 Ctrl 才缩放；按住拖动平移）</span>'
+      + '</div>'
+      + '<div id="scaninfo" class="dim" style="font-size:11px;margin-top:4px"></div>'
+      + '<div id="mapmsg" style="font-size:11.5px;margin-top:6px"></div>'
+      + '<div style="display:flex;gap:8px;margin-top:8px">'
+      +   '<input id="mapname" placeholder="地图名（话题没发布时手填，如 HGTV）" autocomplete="off">'
+      +   '<button id="mapload" class="sec" style="flex:0 0 auto">加载所选地图</button>'
+      +   '<button id="maplist" class="sec" style="flex:0 0 auto">列出车上地图</button>'
+      +   '<button id="maprefresh" class="sec" style="flex:0 0 auto">重新加载当前地图</button>'
+      +   '<label class="dim" style="font-size:11px;display:flex;align-items:center;gap:4px;flex:0 0 auto">'
+      +     '<input type="checkbox" id="mapscan">'
+      +     '<span style="color:#ff9628">雷达 /scan</span></label>'
+      +   '<label class="dim" style="font-size:11px;display:flex;align-items:center;gap:4px;flex:0 0 auto">'
+      +     '<input type="checkbox" id="mapd2l">'
+      +     '<span style="color:#4ade80">相机 /depth2laser</span></label>'
+      + '</div>'
+      + '<div id="maplistout" class="dim" style="font-size:11px;margin-top:5px"></div>'
+      + '<details class="advanced"><summary>高级参数 · 点云校准</summary>'
+      + '<div style="display:flex;gap:8px;margin-top:6px;align-items:center;flex-wrap:wrap">'
+      +   '<span class="dim" style="font-size:11px">点云校准</span>'
+      +   '<input id="cbrot" type="number" step="1" value="0" title="整体旋转（度）" style="width:62px">'
+      +   '<span class="dim" style="font-size:11px">°</span>'
+      +   '<input id="cbdx" type="number" step="0.1" value="0" title="X 偏移（米）" style="width:62px">'
+      +   '<input id="cbdy" type="number" step="0.1" value="0" title="Y 偏移（米）" style="width:62px">'
+      +   '<button id="cbreset" class="sec" style="flex:0 0 auto">复位</button>'
+      +   '<span class="dim" style="font-size:10.5px">（TF 对不上时按肉眼对齐）</span>'
+      + '</div></details>'
+      + '</div>';
+    box.dataset.built = '1';
+    $('mapload').onclick = function(){
+      const v = ($('mapname').value || '').trim();
+      if (!v){ mapMsg('请先填地图名', 'warn'); return; }
+      loadMap(v);
+    };
+    $('mapname').addEventListener('keydown', function(e){
+      if (e.key === 'Enter') $('mapload').click();
+    });
+    $('maplist').onclick = listMaps;
+    // 缩放/平移：整套变换只作用在 #mapwrap 上（图片和 canvas 一起动，
+    // 永远对齐）。canvas 的像素尺寸 cv.width/cv.height 仍等于图片布局尺寸，
+    // 不受 transform 影响 —— 所以 mapGeom 的换算完全不用改。
+    MAPVIEW = {z: 1, tx: 0, ty: 0};
+    function applyMapView(){
+      const w = $('mapwrap');
+      if (!w) return;
+      w.style.transform = 'translate(' + MAPVIEW.tx + 'px,' + MAPVIEW.ty + 'px)'
+        + ' scale(' + MAPVIEW.z + ')';
+    }
+    // 以光标为锚点缩放：让光标下那个点缩放前后停在同一位置。
+    function zoomMapAt(factor, cx, cy){
+      const vp = $('mapviewport');
+      if (!vp) return;
+      const z0 = MAPVIEW.z;
+      const z1 = Math.max(0.2, Math.min(16, z0 * factor));
+      if (z1 === z0) return;
+      const r = vp.getBoundingClientRect();
+      const px = (cx === undefined ? r.width / 2 : cx - r.left);
+      const py = (cy === undefined ? r.height / 2 : cy - r.top);
+      MAPVIEW.tx = px - z1 * (px - MAPVIEW.tx) / z0;
+      MAPVIEW.ty = py - z1 * (py - MAPVIEW.ty) / z0;
+      MAPVIEW.z = z1;
+      applyMapView();
+    }
+    function resetMapView(){
+      MAPVIEW = {z: 1, tx: 0, ty: 0};
+      applyMapView();
+    }
+    // 滚轮默认【不】缩放。原因：从上往下翻页时鼠标几乎必然扫过地图，
+    // 一进来就 preventDefault 的话页面会卡在地图上原地放大，翻不下去。
+    // 只有明确勾选「滚轮缩放」或按住 Ctrl 时才接管滚轮。
+    $('mapviewport').addEventListener('wheel', function(e){
+      const lock = $('mapwheellock');
+      if (!(e.ctrlKey || e.metaKey || (lock && lock.checked))) return;
+      e.preventDefault();
+      zoomMapAt(e.deltaY < 0 ? 1.15 : 1 / 1.15, e.clientX, e.clientY);
+    }, {passive: false});
+    (function(){
+      let drag = false, sx = 0, sy = 0, bx = 0, by = 0;
+      const vp = $('mapviewport');
+      vp.addEventListener('mousedown', function(e){
+        drag = true; sx = e.clientX; sy = e.clientY;
+        bx = MAPVIEW.tx; by = MAPVIEW.ty;
+        vp.style.cursor = 'grabbing';
+        e.preventDefault();
+      });
+      window.addEventListener('mousemove', function(e){
+        if (!drag) return;
+        MAPVIEW.tx = bx + (e.clientX - sx);
+        MAPVIEW.ty = by + (e.clientY - sy);
+        applyMapView();
+      });
+      window.addEventListener('mouseup', function(){
+        if (!drag) return;
+        drag = false; vp.style.cursor = 'grab';
+      });
+    })();
+    $('mapzoomin').onclick = function(){ zoomMapAt(1.4); };
+    $('mapzoomout').onclick = function(){ zoomMapAt(1 / 1.4); };
+    $('mapviewreset').onclick = resetMapView;
+    // 「关闭地图」：整块视口收起，只剩一行提示。
+    // 两个用途：①翻页时不再被地图挡住/误缩放；②地图图很大，收起后
+    // 每秒轮询不再重绘点云，省一点开销。重新点「显示地图」即恢复。
+    $('maptoggle').onclick = function(){
+      S.mapHidden = !S.mapHidden;
+      const vp = $('mapviewport'), btn = $('maptoggle');
+      if (vp) vp.style.display = S.mapHidden ? 'none' : '';
+      if (btn) btn.textContent = S.mapHidden ? '显示地图' : '关闭地图';
+      const ph = $('maphidden');
+      if (ph) ph.style.display = S.mapHidden ? '' : 'none';
+      if (!S.mapHidden) fitMapCanvas();
+    };
+    $('mapimg').onload = function(){ fitMapCanvas(); };
+    window.addEventListener('resize', function(){ fitMapCanvas(); });
+    $('maprefresh').onclick = async function(){
+      S.mapAutoDone = false;
+      mapMsg('已请求车端重新解析 /map_info_v3，稍等 1-2 秒 ...', 'dim');
+      try{
+        const r = await fetch('/api/mapupdate', {cache:'no-store'});
+        const j = await r.json();
+        mapMsg(j.ok ? '已请求重新解析' : ('请求失败：' + (j.err || '')),
+               j.ok ? 'dim' : 'err');
+      }catch(e){ mapMsg('请求失败：' + e, 'err'); }
+    };
+    // 勾选不只是"显示出不出来"，而是真的让车端订阅/退订。
+    // 高频 LaserScan 的回调本身才是开销（逐点三角函数 + TF 变换），
+    // 只在前台不画、车上照跑等于没省。
+    $('mapscan').onchange = function(){
+      laserSwitch('/scan', this.checked);
+      drawScan(S.lastScan, S.lastD2l);
+    };
+    $('mapd2l').onchange = function(){
+      laserSwitch('/depth2laser', this.checked);
+      drawScan(S.lastScan, S.lastD2l);
+    };
+    function _calibBind(){
+      ['cbrot','cbdx','cbdy'].forEach(function(id){
+        const e = $(id);
+        if (!e) return;
+        e.oninput = function(){
+          CALIB.rot = parseFloat($('cbrot').value) || 0;
+          CALIB.dx  = parseFloat($('cbdx').value) || 0;
+          CALIB.dy  = parseFloat($('cbdy').value) || 0;
+          drawScan(S.lastScan, S.lastD2l);
+        };
+      });
+      const r = $('cbreset');
+      if (r) r.onclick = function(){
+        CALIB = {rot:0, dx:0, dy:0};
+        if ($('cbrot')) $('cbrot').value = 0;
+        if ($('cbdx')) $('cbdx').value = 0;
+        if ($('cbdy')) $('cbdy').value = 0;
+        drawScan(S.lastScan, S.lastD2l);
+      };
+    }
+    _calibBind();
+  }
+
+  const meta = $('mapmeta');
+  const name = (m && m.name) ? String(m.name).trim() : '';
+
+  if (!m){
+    meta.textContent = '未连接';
+    mapMsg('', '');
+    return;
+  }
+  if (!m.ok){
+    meta.innerHTML = '<span class="warn">/map_info_v3：'
+      + esc(m.err || '未发布') + '</span>';
+    if (!name) mapMsg('话题里没有地图名 —— 可点「列出车上地图」手动挑一张', 'dim');
+    return;
+  }
+
+  const f = m.fields || {};
+  const bi = gpath(f, ['base_info']) || {};
+  const res = gpath(bi, ['metadata','resolution']);
+  const w   = gpath(bi, ['metadata','width']);
+  const hgt = gpath(bi, ['metadata','height']);
+  const ox  = gpath(bi, ['metadata','origin','position','x']);
+  const oy  = gpath(bi, ['metadata','origin','position','y']);
+  const area = gpath(bi, ['area']);
+  const ct  = gpath(bi, ['create_time']);
+  const swv = gpath(bi, ['slam_software_version']);
+  const bid = gpath(bi, ['id']);
+  S.mapMeta = (res && w && hgt && ox != null && oy != null)
+    ? {res: Number(res), w: Number(w), h: Number(hgt),
+       ox: Number(ox), oy: Number(oy)} : null;
+
+  let s = '地图名 <b style="color:var(--acc)">' + esc(name || '-') + '</b>';
+  if (w && hgt) s += ' · ' + w + '×' + hgt;
+  if (res) s += ' · ' + Number(res).toFixed(3) + ' m/格';
+  if (w && hgt && res) s += '（' + (w*res).toFixed(1) + '×' + (hgt*res).toFixed(1) + ' m）';
+  if (area) s += ' · 面积 ' + Number(area).toFixed(1) + ' ㎡';
+  if (ct)  s += ' · 建图 ' + esc(String(ct));
+  if (swv) s += ' · SLAM ' + esc(String(swv));
+  if (bid) s += ' · id ' + esc(String(bid));
+  if (ox != null && oy != null) s += ' · 原点 (' + Number(ox).toFixed(2) + ', ' + Number(oy).toFixed(2) + ')';
+  meta.innerHTML = s;
+
+  if (!name){
+    mapMsg('话题里没有地图名（base_info.name 为空）', 'warn');
+    return;
+  }
+  // 只在第一次拿到地图名时自动加载。之后即便话题又报了别的名字也不再
+  // 自动切换 —— 否则用户手动选了另一张地图，下一帧就被话题里的名字
+  // 覆盖回去（"点了别的图又自己跳回来"就是这么来的）。
+  if (name && !S.mapAutoDone && !S.mapBusy){ S.mapAutoDone = true; loadMap(name, String(bid || '')); }
+}
+
+function fitMapCanvas(){
+  const img = $('mapimg'), cv = $('mapcv');
+  if (!img || !cv || !img.clientWidth || !img.clientHeight) return;
+  cv.width = img.clientWidth;
+  cv.height = img.clientHeight;
+  drawScan(S.lastScan, S.lastD2l);
+}
+
+/**
+ * 图片真正在元素框里占的那块矩形。
+ *
+ * 为什么需要它：CSS 里 #mapimg 是 width:100% + max-height + object-fit:contain。
+ * contain 会保持比例把图塞进元素框，四周留黑边（letterbox）——
+ * 于是 img.clientWidth/clientHeight 是【元素框】，比图片真正占的那块大。
+ *
+ * 之前直接拿元素框当图片尺寸算缩放：
+ *   sx = cv.width / mt.w    sy = cv.height / mt.h
+ * 元素框和图片比例不同时 sx ≠ sy，点云被各向异性拉伸/压扁，
+ * 表现就是"位置和方向都不对"。所以必须算出真正的内容矩形再换算。
+ */
+function mapGeom(img, mt){
+  const boxW = img.clientWidth || 0, boxH = img.clientHeight || 0;
+  const natW = img.naturalWidth || (mt ? mt.w : 0) || 0;
+  const natH = img.naturalHeight || (mt ? mt.h : 0) || 0;
+  if (!boxW || !boxH || !natW || !natH) return null;
+  const k = Math.min(boxW / natW, boxH / natH);
+  const dispW = natW * k, dispH = natH * k;
+  return {boxW: boxW, boxH: boxH, natW: natW, natH: natH, k: k,
+          dispW: dispW, dispH: dispH,
+          offX: (boxW - dispW) / 2, offY: (boxH - dispH) / 2};
+}
+
+// 点云校准：车端 TF 拿不到或 TF 树不准时的兜底。
+// 单位 rot=度、dx/dy=米，作用于地图系坐标（画点云和车标之前）。
+let CALIB = {rot: 0, dx: 0, dy: 0};
+
+// 地图视图（缩放/平移）。只影响 CSS transform，不参与坐标换算，
+// 所以改它不会让点云和车标错位。
+let MAPVIEW = {z: 1, tx: 0, ty: 0};
+
+function drawScan(sc, d2l){
+  S.lastScan = sc || null;
+  S.lastD2l = d2l || null;
+  const cv = $('mapcv'), img = $('mapimg');
+  if (!cv || !img) return;
+  const ctx = cv.getContext('2d');
+  if (!ctx) return;
+  const info = $('scaninfo');
+  ctx.clearRect(0, 0, cv.width, cv.height);
+  if (!info) return;
+  const ck1 = $('mapscan'), ck2 = $('mapd2l');
+  const on1 = !!(ck1 && ck1.checked), on2 = !!(ck2 && ck2.checked);
+  if (!on1 && !on2){ info.textContent = '（未叠加点云）'; return; }
+  if (img.style.display === 'none' || !cv.width){ info.textContent = ''; return; }
+  const mt = S.mapMeta;
+  if (!mt){ info.textContent = '地图元信息不全，无法换算点云位置'; return; }
+  const gm = mapGeom(img, mt);
+  if (!gm){ info.textContent = '地图图片尚未渲染完成'; return; }
+  const cb = CALIB || {rot: 0, dx: 0, dy: 0};
+  const crad = (cb.rot || 0) * Math.PI / 180;
+  const cca = Math.cos(crad), csa = Math.sin(crad);
+  function toPx(wx, wy){
+    if (cb.dx || cb.dy || cb.rot){
+      const rx = wx * cca - wy * csa, ry = wx * csa + wy * cca;
+      wx = rx + (cb.dx || 0); wy = ry + (cb.dy || 0);
+    }
+    // 先算栅格坐标（列 gx 自左向右、行 gy 自下向上），
+    // 再按图片真正占的那块矩形换算成画布像素。行要翻：图的第 0 行在顶。
+    const gx = (wx - mt.ox) / mt.res;
+    const gy = (wy - mt.oy) / mt.res;
+    return [gm.offX + gx / mt.w * gm.dispW,
+            gm.offY + (mt.h - gy) / mt.h * gm.dispH];
+  }
+
+  // 一个激光源一套坐标：能查到 TF 时点已经在地图系，
+  // 查不到才用 /odom_origin 的位姿搬（老行为）。
+  function paintLaser(s, color){
+    if (!s || !s.ok) return {live: false, msg: (s && s.err) ? s.err : '未发布'};
+    if (!s.live) return {live: false, msg: '已停止发布'};
+    const inMap = !!s.tf_ok;
+    const pose = s.pose;
+    if (!inMap && (!pose || pose[0] == null))
+      return {live: false, msg: '无 TF 且 /odom_origin 无位姿'};
+    const px = pose ? pose[0] : 0, py = pose ? pose[1] : 0;
+    const yaw = (pose && pose[2]) || 0;
+    const ca = Math.cos(yaw), sa = Math.sin(yaw);
+    ctx.fillStyle = color;
+    const pts = s.pts || [];
+    let drawn = 0;
+    for (let i = 0; i < pts.length; i++){
+      const b = pts[i];
+      if (!b || b.length < 2) continue;
+      let wx, wy;
+      if (inMap){ wx = b[0]; wy = b[1]; }
+      else { wx = px + b[0] * ca - b[1] * sa; wy = py + b[0] * sa + b[1] * ca; }
+      const q = toPx(wx, wy);
+      const u = q[0], v = q[1];
+      if (u < 0 || v < 0 || u > cv.width || v > cv.height) continue;
+      ctx.fillRect(u - 1, v - 1, 2, 2);
+      drawn++;
+    }
+    return {live: true, drawn: drawn, n: s.n || pts.length,
+            inMap: inMap, tf_frame: s.tf_frame || ''};
+  }
+
+  // 雷达橘黄、相机转激光绿色 —— 两种来源叠在一张图上必须能分清
+  const r1 = on1 ? paintLaser(sc, 'rgba(255,150,40,0.92)') : null;
+  const r2 = on2 ? paintLaser(d2l, 'rgba(74,222,128,0.92)') : null;
+
+  // 车体当前全局坐标：画成带朝向的箭头。
+  // 它同时是 TF 的探针 —— 车标位置不对，点云必然也不对。
+  const rb = (sc && sc.robot) || null;
+  if (rb && rb.x != null){
+    const q = toPx(rb.x, rb.y);
+    const u = q[0], v = q[1];
+    const a = -(rb.yaw || 0);   // 画布 y 向下，地图 y 向上，角度取反
+    const L = 7, W = 4;
+    ctx.save();
+    ctx.translate(u, v);
+    ctx.rotate(a);
+    ctx.beginPath();
+    ctx.moveTo(L, 0);
+    ctx.lineTo(-L * 0.6, -W);
+    ctx.lineTo(-L * 0.6, W);
+    ctx.closePath();
+    ctx.shadowColor = 'rgba(70,150,255,0.95)';
+    ctx.shadowBlur = 8;
+    ctx.fillStyle = 'rgba(70,150,255,0.95)';
+    ctx.fill();
+    ctx.lineWidth = 1.2;
+    ctx.strokeStyle = 'rgba(190,225,255,0.95)';
+    ctx.stroke();
+    ctx.restore();
+    ctx.fillStyle = 'rgba(190,225,255,0.95)';
+    ctx.font = '11px monospace';
+    ctx.fillText('(' + rb.x.toFixed(2) + ',' + rb.y.toFixed(2) + ')',
+                 u + 11, v - 7);
+    const yawv = rb.yaw || 0;
+    ctx.fillText((yawv * 180 / Math.PI).toFixed(1) + 'deg / '
+                 + yawv.toFixed(3) + 'rad', u + 11, v + 5);
+  }
+
+  function seg(name, on, r){
+    if (!on) return '';
+    if (!r || !r.live) return name + '：' + ((r && r.msg) || '无数据') + ' · ';
+    return name + ' ' + r.drawn + '/' + r.n + ' · ';
+  }
+  const src = (r1 && r1.live) ? r1 : ((r2 && r2.live) ? r2 : null);
+  let txt = seg('雷达', on1, r1) + seg('相机', on2, r2);
+  txt += src
+    ? (src.inMap
+        ? ('坐标来自 TF（' + src.tf_frame + '）')
+        : '基于 /odom_origin（假定 map 与 odom 重合）')
+    : '';
+  if (rb){
+    txt += ' · 车标来自 ' + (rb.src === 'tf'
+        ? ('TF（' + (rb.frame || '') + ' ← ' + (rb.child || '') + '）')
+        : (rb.src === 'tf_stale'
+            ? ('TF 旧值（' + (rb.age || 0) + 's 前）')
+            : '/odom_origin（TF 不可用）'));
+  }
+  txt += ' · 图 ' + gm.natW + '×' + gm.natH
+       + (gm.natW !== mt.w || gm.natH !== mt.h
+          ? '（≠ 元数据 ' + mt.w + '×' + mt.h + '）' : '');
+  info.textContent = txt;
+}
+
+/* ── 深度相机 3D 点云 ──
+   车端把 /camera_NN/depth/image_raw 按 camera_info 的内参反投影成三维点，
+   相机号 01~05 在下拉框里选（现场确认：02 就是 /camera_02/depth/image_raw）。
+   这里只负责画：正交投影 + 鼠标拖拽旋转 + 滚轮缩放。
+   相机系是 X 右、Y 下、Z 前 —— 画之前把 Y 取反，屏幕上才"上"。 */
+let PC3 = {yaw: -0.5, pitch: -0.45, zoom: 1, pts: null, meta: null,
+           drag: null, extInit: false};
+
+async function pc3dLogRefresh(){
+  const pre = $('pc3dlog');
+  if (!pre) return;
+  try{
+    const r = await fetch('/api/agentlog');
+    if (!r.ok){
+      // 分不清"服务没了"和"接口不存在"最耽误事，这里说死。
+      pre.textContent = '读取失败：HTTP ' + r.status
+        + '（若是 404，说明 8766 里跑的还是旧版服务：关掉黑窗口重开）';
+      return;
+    }
+    const d = await r.json();
+    const ls = (d && d.lines) || [];
+    pre.textContent = ls.length ? ls.join('\n')
+                                : '（车端还没有日志输出 —— 说明采集脚本没起来或 stderr 没接上）';
+  }catch(e){
+    pre.textContent = '读取失败：' + e
+      + '（Failed to fetch = 8766 服务没响应，多半是黑窗口关了或还没启动）';
+  }
+}
+
+function pc3dCardBuild(){
+  const box = $('pc3dbox');
+  if (!box || box.dataset.built === '1') return;
+  box.innerHTML = '<div class="card"><h2>深度相机 3D 点云</h2>'
+    + '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:6px">'
+    +   '<label class="dim" style="font-size:11px;display:flex;align-items:center;gap:4px">'
+    +     '<input type="checkbox" id="pc3don">订阅并显示</label>'
+    +   '<span class="dim" style="font-size:10.5px">'
+    +     '（深度图 10Hz 且单帧很大，只在需要时开，关了车端会真退订）</span>'
+    +   '<span class="dim" style="font-size:11px;display:flex;align-items:center;gap:4px">'
+    +     '相机 <select id="pc3dcam" style="font-size:11px">'
+    +       '<option value="1">01</option><option value="2">02</option>'
+    +       '<option value="3">03</option><option value="4">04</option>'
+    +       '<option value="5">05</option></select></span>'
+    +   '<button id="pc3dreset" class="sec" style="flex:0 0 auto">复位视角</button>'
+    +   '<span style="flex:0 0 auto;font-size:10.5px;color:var(--dim)">过滤 &gt;'
+    +     '<input id="pc3dmaxd" type="number" min="0" step="0.1" value="2" '
+    +       'style="width:58px;font-size:10.5px;padding:1px 4px;margin:0 3px">米'
+    +     '<span class="dim">(0=不过滤)</span></span>'
+    +   '<label class="dim" style="font-size:10.5px;display:flex;align-items:center;'
+    +     'gap:4px;flex:0 0 auto">'
+    +     '<input type="checkbox" id="pc3dwheellock" style="width:auto;margin:0">'
+    +     '<span>滚轮缩放</span></label>'
+    +   '<span class="dim" style="font-size:10.5px">'
+    +     '（默认滚轮翻页，勾选后或按住 Ctrl 才缩放）</span>'
+    + '</div>'
+    + '<canvas id="pc3dcv" width="1400" height="440" style="width:100%;'
+    +   'height:440px;background:#05070c;border:1px solid #1b2b3a;'
+    +   'border-radius:6px;cursor:grab;display:block"></canvas>'
+    + '<div id="pc3dinfo" class="dim" style="font-size:11px;margin-top:5px"></div>'
+    + '<details class="advanced"><summary>高级参数 · 外参与轴约定</summary>'
+    + '<div style="margin-top:6px;padding:6px 8px">'
+    +   '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">'
+    +     '<label class="dim" style="font-size:11px;display:flex;align-items:center;gap:4px">'
+    +       '<input type="checkbox" id="pc3dexton">应用外参</label>'
+    +     '<span class="dim" style="font-size:10.5px">轴约定 '
+    +       '<select id="pc3daxis" style="font-size:10.5px">'
+    +         '<option value="opt">光学系 X右/Y下/Z前</option>'
+    +         '<option value="body">对齐系 X前/Y左/Z上</option>'
+    +       '</select></span>'
+    +     '<label class="dim" style="font-size:10.5px;display:flex;align-items:center;gap:3px">'
+    +       '<input type="checkbox" id="pc3dinv">取逆</label>'
+    +     '<span class="dim" style="font-size:10.5px">x'
+    +       '<input id="ex0" type="number" step="0.01" style="width:62px;font-size:10.5px"></span>'
+    +     '<span class="dim" style="font-size:10.5px">y'
+    +       '<input id="ex1" type="number" step="0.01" style="width:62px;font-size:10.5px"></span>'
+    +     '<span class="dim" style="font-size:10.5px">z'
+    +       '<input id="ex2" type="number" step="0.01" style="width:62px;font-size:10.5px"></span>'
+    +     '<span class="dim" style="font-size:10.5px">roll'
+    +       '<input id="ex3" type="number" step="0.1" style="width:62px;font-size:10.5px"></span>'
+    +     '<span class="dim" style="font-size:10.5px">pitch'
+    +       '<input id="ex4" type="number" step="0.1" style="width:62px;font-size:10.5px"></span>'
+    +     '<span class="dim" style="font-size:10.5px">yaw'
+    +       '<input id="ex5" type="number" step="0.1" style="width:62px;font-size:10.5px"></span>'
+    +     '<button id="pc3dextrst" class="sec" style="font-size:10.5px;padding:2px 8px">'
+    +       '恢复默认</button>'
+    +   '</div>'
+    +   '<div class="dim" style="font-size:10px;margin-top:4px;line-height:1.5">'
+    +     'xyz 米 / rpy 度。相机01 默认 [0.34, 0.03, 0.13, 1.93, -31.96, -2.88]。'
+    +     '四种组合可当场切换看效果：地面应该在下方、前方点云落在 +X。'
+    +   '</div>'
+    + '</div></details>'
+    + '<div style="margin-top:6px">'
+    +   '<div style="display:flex;gap:8px;align-items:center">'
+    +     '<span class="dim" style="font-size:11px">车端日志</span>'
+    +     '<button id="pc3dlogbtn" class="sec" style="font-size:10.5px;padding:2px 8px">'
+    +       '显示 / 刷新</button>'
+    +     '<span class="dim" style="font-size:10.5px">'
+    +       '（开关没反应时看这里：车端认到命令会打印 pc3d want -&gt; True）</span>'
+    +   '</div>'
+    +   '<pre id="pc3dlog" style="display:none;margin-top:4px;max-height:150px;'
+    +     'overflow:auto;background:#05070c;border:1px solid #1b2b3a;border-radius:6px;'
+    +     'padding:6px;font-size:10.5px;line-height:1.5;color:#9fb3c8;'
+    +     'white-space:pre-wrap;word-break:break-all"></pre>'
+    + '</div>'
+    + '</div>';
+  box.dataset.built = '1';
+  const cv = $('pc3dcv');
+  if (!cv) return;
+  cv.addEventListener('mousedown', function(e){
+    PC3.drag = {x: e.clientX, y: e.clientY,
+                yaw: PC3.yaw, pitch: PC3.pitch};
+    cv.style.cursor = 'grabbing';
+  });
+  window.addEventListener('mouseup', function(){
+    PC3.drag = null;
+    if (cv) cv.style.cursor = 'grab';
+  });
+  window.addEventListener('mousemove', function(e){
+    if (!PC3.drag) return;
+    PC3.yaw = PC3.drag.yaw + (e.clientX - PC3.drag.x) * 0.01;
+    PC3.pitch = PC3.drag.pitch + (e.clientY - PC3.drag.y) * 0.01;
+    if (PC3.pitch > 1.5) PC3.pitch = 1.5;
+    if (PC3.pitch < -1.5) PC3.pitch = -1.5;
+    drawPC3D(null);
+  });
+  // 滚轮默认【不】缩放，与地图同一套策略：从上往下翻页时鼠标必然扫过
+  // 画布，一进来就 preventDefault 会让页面卡在这里原地缩放、翻不下去。
+  // 只有明确勾选「滚轮缩放」或按住 Ctrl 时才接管。
+  cv.addEventListener('wheel', function(e){
+    const lock = $('pc3dwheellock');
+    if (!(e.ctrlKey || e.metaKey || (lock && lock.checked))) return;
+    e.preventDefault();
+    PC3.zoom = Math.max(0.2, Math.min(8,
+      PC3.zoom * (e.deltaY > 0 ? 0.9 : 1.1)));
+    drawPC3D(null);
+  }, {passive: false});
+  $('pc3dreset').onclick = function(){
+    PC3.yaw = -0.5; PC3.pitch = -0.45; PC3.zoom = 1;
+    drawPC3D(null);
+  };
+  // 外参任一改动都立刻重绘：现场要当场比对四种组合哪种对，
+  // 不能等下一次采样。
+  const mde = $('pc3dmaxd');
+  if (mde) mde.oninput = function(){ drawPC3D(null); };
+  ['pc3dexton', 'pc3daxis', 'pc3dinv',
+   'ex0', 'ex1', 'ex2', 'ex3', 'ex4', 'ex5'].forEach(function(id){
+    const el = $(id);
+    if (!el) return;
+    el.addEventListener('change', function(){ drawPC3D(null); });
+    el.addEventListener('input', function(){ drawPC3D(null); });
+  });
+  const erb = $('pc3dextrst');
+  if (erb) erb.onclick = function(){
+    PC3.extInit = false;
+    drawPC3D(null);
+  };
+  $('pc3dlogbtn').onclick = async function(){
+    const pre = $('pc3dlog');
+    if (pre.style.display !== 'none'){ pre.style.display = 'none'; return; }
+    pre.style.display = 'block';
+    await pc3dLogRefresh();
+  };
+  function pc3dCam(){
+    const sel = $('pc3dcam');
+    const v = parseInt((sel && sel.value) || '1', 10);
+    return (v >= 1 && v <= 5) ? v : 1;
+  }
+  $('pc3dcam').onchange = async function(){
+    PC3.extInit = false;   // 换相机后按新相机的默认外参重新预填
+    // 换相机要走同一条命令下发：车端收到 cam 会先退订再重订，
+    // 否则看到的还是上一路相机的点。
+    if (!$('pc3don').checked){ drawPC3D(null); return; }
+    try{
+      const r = await fetch('/api/pc3d', {method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({on: true, cam: pc3dCam()})});
+      const j = await r.json();
+      const el = $('pc3dinfo');
+      if (el){
+        el.textContent = j.ok
+          ? ('已切到相机 ' + ('0' + pc3dCam()).slice(-2) + '（' + pc3dTopicText() + '）')
+          : ('切换失败：' + (j.err || '未知'));
+        el.style.color = j.ok ? '' : '#fca5a5';
+      }
+      pc3dLogRefresh();
+    }catch(e){
+      const el = $('pc3dinfo');
+      if (el) el.textContent = '切换请求失败：' + e;
+    }
+    drawPC3D(null);
+  };
+  $('pc3don').onchange = async function(){
+    const on = this.checked;
+    try{
+      const r = await fetch('/api/pc3d', {method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({on: on, cam: pc3dCam()})});
+      const j = await r.json();
+      const el = $('pc3dinfo');
+      const via = j.via || {};
+      const detail = 'stdin=' + (via.stdin ? '通' : '未通')
+                   + ' / 标志文件=' + (via.flag ? '通' : '未通');
+      if (!j.ok){
+        // 把两条通道各自的失败原因原样显示，别让"未通"两个字打发人
+        if (el){
+          el.textContent = '开关下发失败（' + detail + '）'
+                         + '：' + (j.err || '未知错误')
+                         + ' —— 点下方「车端日志」看车端收到了什么';
+          el.style.color = '#fca5a5';
+        }
+      }else{
+        if (el){
+          el.textContent = '开关已下发（' + detail + '），等车端订阅…';
+          el.style.color = '';
+        }
+      }
+      // 勾完立刻拉一次车端日志：车端认到命令会打印 pc3d want -> True
+      pc3dLogRefresh();
+    }catch(e){
+      const el = $('pc3dinfo');
+      if (el) el.textContent = '开关请求失败：' + e;
+    }
+    drawPC3D(null);
+  };
+}
+
+/* 相机外参（相机系 -> base_link）。
+   变换放在前端做，是因为现场给的 rpy 按 ROS 标准算出来相机正前方指向
+   (-0.53, 0, +0.85)——朝后上方，而任何小于 90 度的单一欧拉角都算不出
+   "朝下"，说明轴约定至少有一样不是默认假设的那样。
+   与其打包让现场反复试，不如把 6 个数 + 轴约定 + 取逆都做成可调，
+   改完立刻重绘，一次就能判定哪种对。 */
+function extVals(){
+  const v = [];
+  for (let i = 0; i < 6; i++){
+    const e = $('ex' + i);
+    const n = e ? parseFloat(e.value) : NaN;
+    v.push(isNaN(n) ? 0 : n);
+  }
+  return v;
+}
+function rpyMatJS(rd, pd, yd){
+  const r = rd * Math.PI / 180, p = pd * Math.PI / 180, y = yd * Math.PI / 180;
+  const cr = Math.cos(r), sr = Math.sin(r);
+  const cp = Math.cos(p), sp = Math.sin(p);
+  const cy = Math.cos(y), sy = Math.sin(y);
+  const Rx = [1, 0, 0, 0, cr, -sr, 0, sr, cr];
+  const Ry = [cp, 0, sp, 0, 1, 0, -sp, 0, cp];
+  const Rz = [cy, -sy, 0, sy, cy, 0, 0, 0, 1];
+  function mul(a, b){
+    const o = [];
+    for (let i = 0; i < 3; i++)
+      for (let j = 0; j < 3; j++){
+        let t = 0;
+        for (let k = 0; k < 3; k++) t += a[i * 3 + k] * b[k * 3 + j];
+        o.push(t);
+      }
+    return o;
+  }
+  return mul(mul(Rz, Ry), Rx);
+}
+function applyExtJS(flat){
+  const e = extVals();
+  const R = rpyMatJS(e[3], e[4], e[5]);
+  const inv = !!($('pc3dinv') && $('pc3dinv').checked);
+  const body = (($('pc3daxis') && $('pc3daxis').value) === 'body');
+  let m = R, t = [e[0], e[1], e[2]];
+  if (inv){
+    m = [R[0], R[3], R[6], R[1], R[4], R[7], R[2], R[5], R[8]];
+    t = [-(m[0] * e[0] + m[1] * e[1] + m[2] * e[2]),
+         -(m[3] * e[0] + m[4] * e[1] + m[5] * e[2]),
+         -(m[6] * e[0] + m[7] * e[1] + m[8] * e[2])];
+  }
+  const out = new Array(flat.length);
+  for (let i = 0; i * 3 + 2 < flat.length; i++){
+    let x = flat[i * 3], y = flat[i * 3 + 1], z = flat[i * 3 + 2];
+    if (body){ const nx = z, ny = -x, nz = -y; x = nx; y = ny; z = nz; }
+    out[i * 3]     = m[0] * x + m[1] * y + m[2] * z + t[0];
+    out[i * 3 + 1] = m[3] * x + m[4] * y + m[5] * z + t[1];
+    out[i * 3 + 2] = m[6] * x + m[7] * y + m[8] * z + t[2];
+  }
+  return out;
+}
+function fillExt(m){
+  if (PC3.extInit) return;
+  const d = (m && m.ext) ? m.ext : null;
+  if (!d || d.length < 6) return;
+  for (let i = 0; i < 6; i++){
+    const e = $('ex' + i);
+    if (e) e.value = d[i];
+  }
+  PC3.extInit = true;
+}
+
+/* 当前相机对应的两个话题名。
+   必须放在顶层：drawPC3D 是全局函数，不能依赖初始化闭包里的同名函数。
+   v1.0.53 就栽在这里 —— 闭包外的 drawPC3D 调用它报 is not defined，
+   异常一路冒到外层 catch，状态栏被写成「服务未运行」，剩余时间那行
+   压根没执行到，于是出现「数据明明在更新，右上角却说服务未运行」。 */
+function pc3dTopicText(){
+  const sel = $('pc3dcam');
+  const v = parseInt((sel && sel.value) || '1', 10);
+  const n = ('0' + ((v >= 1 && v <= 5) ? v : 1)).slice(-2);
+  return '/camera_' + n + '/depth/image_raw + camera_info';
+}
+function drawPC3D(p){
+  pc3dCardBuild();
+  const cv = $('pc3dcv'), info = $('pc3dinfo');
+  if (!cv) return;
+  // 画布铺满后 CSS 宽度是流动的，而绘图用的是 attribute width。
+  // 不把两者对齐，画面会被横向拉伸（点变成横椭圆）。每帧同步一次最省事。
+  const cssW = Math.max(320, cv.clientWidth || cv.width);
+  const cssH = Math.max(200, cv.clientHeight || cv.height);
+  if (cv.width !== cssW || cv.height !== cssH){
+    cv.width = cssW; cv.height = cssH;
+  }
+  const ctx = cv.getContext('2d');
+  if (!ctx) return;
+  const W = cv.width, H = cv.height;
+  if (p){ PC3.pts = p.pts || null; PC3.meta = p; }
+  const m = PC3.meta || {};
+  ctx.clearRect(0, 0, W, H);
+  const chk = $('pc3don');
+  if (!chk || !chk.checked){
+    ctx.fillStyle = 'rgba(130,170,200,0.85)';
+    ctx.font = '13px sans-serif';
+    ctx.fillText('未开启 —— 勾选「订阅并显示」后，车端才订阅深度图', 16, 30);
+    if (info) info.textContent = pc3dTopicText();
+    return;
+  }
+  if (!m.ok){
+    ctx.fillStyle = 'rgba(255,150,120,0.9)';
+    ctx.font = '13px sans-serif';
+    ctx.fillText('深度点云：' + (m.err || '等待数据 ...'), 16, 30);
+    // 诊断行：区分「命令没送到车端」和「送到了但没数据」。
+    // 以前两种都只显示一句"未开启"，勾了开关却永远这句，无从排查。
+    const dg = m.diag || {};
+    let dtxt = '深度图默认不订阅，勾选后才开始';
+    if (m.err && String(m.err).indexOf('未开启') >= 0){
+      dtxt = '开关没生效：车端未收到开启命令（stdin=' + (dg.via_stdin ? '通' : '未通')
+           + '，标志文件=' + (dg.via_flag ? '通' : '未通') + '）—— 请断开重连后再勾';
+    } else if (dg.on){
+      dtxt = '车端已开启：收 ' + (dg.frames || 0) + ' 帧 / 算 ' + (dg.calcs || 0)
+           + ' 次' + (dg.age != null ? (' / 上次 ' + dg.age + 's 前') : '')
+           + (m.enc ? (' / ' + m.enc + ' ' + m.w + '×' + m.h) : '');
+    }
+    if (info) info.textContent = dtxt;
+    return;
+  }
+  let flat = PC3.pts || [];
+  fillExt(m);
+  const extOn = !!($('pc3dexton') && $('pc3dexton').checked);
+  if (extOn && flat.length) flat = applyExtJS(flat);
+  // 距离过滤：远处的点本来就稀疏发虚，留着只会让点云显乱。
+  // 在质心/取景之前滤掉 —— 取景跟着留下的点走，否则远处一片虚点会把
+  // 近处真正要看的东西压成一小团。
+  const mxEl = $('pc3dmaxd');
+  const mx = mxEl ? (parseFloat(mxEl.value) || 0) : 0;
+  let cut = 0;
+  if (mx > 0 && flat.length){
+    const keep = [];
+    for (let i = 0; i < flat.length; i += 3){
+      const x = flat[i], y = flat[i + 1], z = flat[i + 2];
+      if (Math.sqrt(x * x + y * y + z * z) > mx){ cut++; continue; }
+      keep.push(x, y, z);
+    }
+    flat = keep;
+  }
+  PC3.cut = cut;
+  PC3.total = Math.floor((PC3.pts || []).length / 3);
+  const n = Math.floor(flat.length / 3);
+  if (!n){
+    // 区分「还没收到点云」和「有点云但被过滤阈值全滤掉了」——
+    // 阈值调太小时画面全黑，不说清楚会往"车端没数据"的方向白查。
+    const allCut = (mx > 0 && PC3.total > 0);
+    ctx.fillStyle = 'rgba(255,190,120,0.9)';
+    ctx.font = '13px sans-serif';
+    ctx.fillText(allCut ? ('距离过滤 ' + mx + ' 米后没有剩余点（原 '
+                           + PC3.total + ' 点全被滤掉，把阈值调大）')
+                        : '已开启，但还没有点云（车端每 2 秒算一次，稍等）', 16, 30);
+    if (info) info.textContent = allCut ? ('过滤后 0 点（原 ' + PC3.total + ' 点）')
+                                        : '等待车端第一帧点云 ...';
+    return;
+  }
+  // 质心 + 包围半径，用来自动取景，换相机/换场景都不用手调
+  let ax = 0, ay = 0, az = 0;
+  for (let i = 0; i < n; i++){
+    ax += flat[i * 3]; ay += flat[i * 3 + 1]; az += flat[i * 3 + 2];
+  }
+  const cx = ax / n, cy = ay / n, cz = az / n;
+  let rr = 0;
+  for (let i = 0; i < n; i++){
+    const dx = flat[i * 3] - cx, dy = flat[i * 3 + 1] - cy,
+          dz = flat[i * 3 + 2] - cz;
+    const d = dx * dx + dy * dy + dz * dz;
+    if (d > rr) rr = d;
+  }
+  const R = Math.sqrt(rr) || 1;
+  const f = (Math.min(W, H) * 0.42 / R) * PC3.zoom;
+  const cyaw = Math.cos(PC3.yaw), syaw = Math.sin(PC3.yaw);
+  const cpi = Math.cos(PC3.pitch), spi = Math.sin(PC3.pitch);
+  // 两种坐标系都要能看：
+  //   相机系   X 右 / Y 下 / Z 前 —— 水平面是 X-Z，垂直是 Y（取反成上）
+  //   base_link X 前 / Y 左 / Z 上 —— 水平面是 X-Y，垂直是 Z
+  // 以前只按相机系写死，套了外参之后点云会整个"侧躺"，看不出地形。
+  const zup = extOn;
+  function proj(x, y, z){
+    let a, b, c;
+    if (zup){ a = x; b = z; c = y; }
+    else { a = x; b = -y; c = z; }
+    const X = a * cyaw + c * syaw;
+    const Z = -a * syaw + c * cyaw;
+    const Y = b * cpi - Z * spi;
+    const Z2 = b * spi + Z * cpi;
+    return [W / 2 + X * f, H / 2 - Y * f, Z2];
+  }
+  function axis(x, y, z, color, label){
+    const q = proj(x, y, z);
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(W / 2, H / 2);
+    ctx.lineTo(q[0], q[1]);
+    ctx.stroke();
+    ctx.fillStyle = color;
+    ctx.font = '11px monospace';
+    ctx.fillText(label, q[0] + 3, q[1] - 3);
+  }
+  for (let i = 0; i < n; i++){
+    const q = proj(flat[i * 3] - cx, flat[i * 3 + 1] - cy,
+                   flat[i * 3 + 2] - cz);
+    const u = q[0], v = q[1];
+    if (u < 0 || v < 0 || u > W || v > H) continue;
+    // 近的点画大一点、亮一点 —— 正交投影没有透视缩小，
+    // 靠大小和明暗给深度感，否则一团点看不出前后。
+    const t = Math.max(0, Math.min(1, (q[2] + R) / (2 * R)));
+    const sz = Math.max(1, 3 - 2 * t);
+    ctx.fillStyle = 'rgba(' + Math.round(60 + 120 * (1 - t)) + ','
+      + Math.round(255 - 70 * t) + ',' + Math.round(150 - 50 * t) + ','
+      + (0.95 - 0.4 * t) + ')';
+    ctx.fillRect(u, v, sz, sz);
+  }
+  if (zup){
+    axis(0.45 * R, 0, 0, 'rgba(255,90,90,0.75)', 'X(车前)');
+    axis(0, 0.45 * R, 0, 'rgba(120,255,160,0.75)', 'Y(车左)');
+    axis(0, 0, 0.35 * R, 'rgba(90,180,255,0.75)', 'Z(上)');
+  } else {
+    axis(0.45 * R, 0, 0, 'rgba(255,90,90,0.75)', 'X(相机右)');
+    axis(0, 0.45 * R, 0, 'rgba(90,180,255,0.75)', 'Z(前)');
+    axis(0, 0.35 * R, 0, 'rgba(120,255,160,0.75)', 'Y(下)');
+  }
+  ctx.fillStyle = 'rgba(150,190,215,0.85)';
+  ctx.font = '12px monospace';
+  ctx.fillText('点 ' + n + ' · yaw ' + (PC3.yaw).toFixed(2)
+    + ' · pitch ' + (PC3.pitch).toFixed(2)
+    + ' · zoom ' + PC3.zoom.toFixed(2) + 'x', 12, H - 12);
+  if (info){
+    info.textContent = '点云 ' + n + ' 点'
+      + (PC3.cut ? ('（滤掉 ' + PC3.cut + ' 个 > ' + mx + ' m 的点）') : '')
+      + ' · 深度图 '
+      + (m.w || 0) + '×' + (m.h || 0) + ' · ' + (m.enc || '-')
+      + ' · ' + (zup ? ('外参已应用 → base_link：X 车前 / Y 车左 / Z 上')
+        : ('未应用外参，点云在相机系：X 右 / Y 下 / Z 前'))
+      + ' · 鼠标拖拽旋转 / 滚轮缩放 · 视角范围 ' + R.toFixed(2) + ' m';
+  }
+}
+
+/* 位姿诊断：位姿对不准来回折腾了很多轮，根因一直没定位到，
+   原因就是失败信息全被 except 吞掉了。这里把车端的 TF 探测过程
+   原样摊开：listener 建没建起来、坐标系名是什么、每个候选查得
+   到查不到、失败原因是什么 —— 一次就能定位。 */
+/* 位姿诊断曾在这里输出车端 TF 探测过程（listener 建没建起来、各候选
+   查得到查不到）。位姿对齐已稳定，用户要求不再显示，故整个函数留空。 */
+function renderPoseDiag(dg){ return; }
+
+function mapMsg(t, cls){
+  const e = $('mapmsg');
+  if (!e) return;
+  e.textContent = t || '';
+  e.className = cls || '';
+}
+
+async function loadMap(name, mid){
+  if (!name && !mid) return;
+  S.mapBusy = true;
+  const img = $('mapimg');
+  mapMsg('正在读取 ' + (name || mid) + ' 的 map.png ...', 'dim');
+  img.style.display = 'none';
+  // name 和 id 一起给：服务端先按 name 找，找不到就用 id 兜底
+  // （地图名改过 / 含特殊字符时，磁盘上的目录名往往还是建图时的 id）。
+  let q = '/api/map?name=' + encodeURIComponent(name || '');
+  if (mid) q += '&id=' + encodeURIComponent(mid);
+  try{
+    const r = await fetch(q, {cache:'no-store'});
+    if (!r.ok){
+      let e = '读取失败（HTTP ' + r.status + '）';
+      try{ const j = await r.json(); e = j.err || e; }catch(_){}
+      mapMsg(e, 'err');
+      S.mapName = name;
+      S.mapBusy = false;
+      return;
+    }
+    // 服务端回的是图片二进制，命中了哪个目录只能走响应头带回来
+    const used = r.headers.get('X-Map-Key') || '';
+    const b = await r.blob();
+    if (S.mapUrl) URL.revokeObjectURL(S.mapUrl);
+    S.mapUrl = URL.createObjectURL(b);
+    img.src = S.mapUrl;
+    img.style.display = 'block';
+    S.mapName = name;
+    let tail = '（' + (b.size/1048576).toFixed(2) + ' MB）';
+    if (used && used !== name){
+      // 名称没命中、靠 id 兜到的：说清楚，否则用户以为加载错了图
+      tail = '（' + (b.size/1048576).toFixed(2) + ' MB，按 ID 命中：'
+           + esc(used) + '）';
+    }
+    mapMsg('地图 ' + (name || used) + tail, 'ok');
+  }catch(e){
+    mapMsg('读取失败：' + e, 'err');
+  }
+  S.mapBusy = false;
+}
+
+async function listMaps(){
+  const out = $('maplistout');
+  out.textContent = '正在列出 ...';
+  try{
+    const r = await fetch('/api/maps', {cache:'no-store'});
+    const j = await r.json();
+    if (!j.ok){ out.textContent = (j.err || '列目录失败'); return; }
+    const ns = j.names || [];
+    if (!ns.length){ out.textContent = '车上 ' + (j.dir||'') + ' 下没有地图目录'; return; }
+    out.innerHTML = '车上共 ' + ns.length + ' 张：'
+      + ns.map(n => '<a href="javascript:void(0)" data-map="'+esc(n)+'" '
+          + 'style="color:var(--acc);margin-left:6px">'+esc(n)+'</a>').join('');
+    out.querySelectorAll('a[data-map]').forEach(function(a){
+      a.onclick = function(){ $('mapname').value = a.dataset.map; loadMap(a.dataset.map); };
+    });
+  }catch(e){ out.textContent = '请求失败：' + e; }
+}
+
+/* ── glog 日志提取 ──
+   为什么在车端筛：一个 glog 目录常有上百个文件，全量拉回本地既慢又占带宽；
+   车端只回传命中时间窗的行，通常几 KB。
+
+   为什么「找不到」要说清楚：只回一句未找到，用户无法判断是时间填错了，
+   还是车上根本没存到那段时间 —— 这两者的下一步动作完全不同。 */
+/* 来源直接用车上目录名，且必须与 server.py 的 GLOG_DIRS 完全一致 ——
+   两边只要不同步，页面勾了、服务端不认识，静默变成「没勾任何来源」。
+   不再另做中文别名：排查时对着终端 ls 的输出找目录，页面上是别名反而
+   要再翻译一次。新增日志目录时两边都要加。 */
+const GL_SRC = [
+  'diagnose', 'tasks_manager', 'bags_record', 'clean_mask_manager',
+  'cloudsync_manager', 'deep_perception', 'depthcamera',
+  'dynamic_controller', 'elevatorLora_manager', 'hardware_manger',
+  'maps_manager', 'params_manager', 'perception', 'v3_debug',
+  'BlueSea2LaserUDPLogPath', 'IMULogPath', 'LineLdaerUARTLogPath',
+  'system',
+];
+/* 一键回到「诊断 + 任务」——默认一个都不勾之后，靠这个少点两下。 */
+const GL_DEF = ['diagnose', 'tasks_manager'];
+const GLOGCAP_LINES = 6000;
+/* 命中清单最多列这么多文件名，再多折叠成「等 N 个」——
+   二十几个目录全勾时，全列出来会盖住日志本身。 */
+const GLOG_SHOW_FILES = 6;
+
+function glPad(n){ return (n < 10 ? '0' : '') + n; }
+
+function glFmt(ts){
+  const d = new Date(ts * 1000);
+  return d.getFullYear() + '-' + glPad(d.getMonth() + 1) + '-' + glPad(d.getDate())
+       + ' ' + glPad(d.getHours()) + ':' + glPad(d.getMinutes()) + ':' + glPad(d.getSeconds());
+}
+
+/* 年月日时分秒各一个框，而不是一个长串输入框：
+   一个框要按 "2026-10-20 11:18:00" 逐个敲分隔符，改其中一位还得重敲整串。 */
+function glReadTime(){
+  const v = ['gly', 'glmo', 'gld', 'glh', 'glmi', 'gls'].map(function(id){
+    return parseInt($(id).value, 10);
+  });
+  for (let i = 0; i < v.length; i++){
+    if (isNaN(v[i])) return null;
+  }
+  const y = v[0], mo = v[1], d = v[2], h = v[3], mi = v[4], s = v[5];
+  if (y < 2000 || y > 2099 || mo < 1 || mo > 12 || d < 1 || d > 31) return null;
+  if (h < 0 || h > 23 || mi < 0 || mi > 59 || s < 0 || s > 59) return null;
+  const dt = new Date(y, mo - 1, d, h, mi, s, 0);
+  // 回读校验：2 月 31 日会被 Date 静默进位成 3 月 3 日。不校验的话，
+  // 用户日期填错却拿到一个「看起来正常」的时间窗，查错方向还不自知。
+  if (dt.getFullYear() !== y || dt.getMonth() !== mo - 1 || dt.getDate() !== d) return null;
+  const t = dt.getTime();
+  return isNaN(t) ? null : t / 1000;
+}
+
+function glSetTime(ts){
+  const d = new Date(ts * 1000);
+  $('gly').value = d.getFullYear();
+  $('glmo').value = d.getMonth() + 1;
+  $('gld').value = d.getDate();
+  $('glh').value = d.getHours();
+  $('glmi').value = d.getMinutes();
+  $('gls').value = d.getSeconds();
+}
+
+function glSrcKeys(){
+  const out = [];
+  for (let i = 0; i < GL_SRC.length; i++){
+    const e = $('glsrc' + i);
+    if (e && e.checked) out.push(GL_SRC[i]);
+  }
+  return out;
+}
+
+function glSetSrcs(f){
+  for (let i = 0; i < GL_SRC.length; i++){
+    const e = $('glsrc' + i);
+    if (e) e.checked = !!f(GL_SRC[i]);
+  }
+  glUpdCnt();
+}
+
+function glUpdCnt(){
+  const n = glSrcKeys().length;
+  $('glcnt').textContent = '已选 ' + n + ' / ' + GL_SRC.length + ' 个来源'
+    + (n > 2 ? '（勾得越多车端扫得越久）' : '');
+}
+
+/* 标签改成 flex 横排。原来靠 label{display:block} + nowrap + overflow:hidden，
+   而全局 input{width:100%} 把复选框撑成整行宽，文字被挤到下一行又被裁掉 ——
+   名字就整个不见了。现在复选框尺寸由 CSS 单独钉死，这里只管对齐。 */
+function glBuildSrcs(){
+  let h = '';
+  for (let i = 0; i < GL_SRC.length; i++){
+    h += '<label style="display:flex;align-items:center;gap:0;font-size:11.5px;'
+       + 'color:var(--text);white-space:nowrap;overflow:visible">'
+       + '<input type="checkbox" id="glsrc' + i + '">'
+       + '<span>' + esc(GL_SRC[i]) + '</span></label>';
+  }
+  $('glsrcs').innerHTML = h;
+  for (let i = 0; i < GL_SRC.length; i++){
+    const e = $('glsrc' + i);
+    if (e) e.onchange = glUpdCnt;
+  }
+  glUpdCnt();
+}
+
+/* 把命中的文件名列进表头：只知道「扫过 N 个文件」没用，
+   真正要的是哪几份 —— 打开哪一份接着往下看，全靠这个。 */
+function glFileList(d, pad){
+  const fs = d.files || [];
+  if (!fs.length) return '';
+  const nm = fs.map(function(f){ return f.name + '(' + f.n + ')'; });
+  const show = nm.slice(0, GLOG_SHOW_FILES);
+  let s = pad + '涉及文件：' + show.join('、');
+  if (nm.length > show.length) s += ' 等 ' + nm.length + ' 个';
+  return s;
+}
+
+/* 搜索只过滤日志行，# 开头的表头行永远留着 —— 表头里有时间窗和涉及文件，
+   搜的时候正需要对照着看，滤掉了反而不知道自己看的是哪一段。 */
+var GL_RAW = '', SY_RAW = '';
+
+function glSetOut(v){
+  GL_RAW = v;
+  glFilter();
+}
+
+function sySetOut(v){
+  SY_RAW = v;
+  syFilter();
+}
+
+function glFilter(){
+  const q = ($('glsearch').value || '').trim();
+  const out = $('glout'), hit = $('glhit');
+  if (!q){ out.value = GL_RAW; hit.textContent = ''; return; }
+  const low = q.toLowerCase();
+  const kept = [];
+  let n = 0;
+  GL_RAW.split('\n').forEach(function(ln){
+    if (ln.charAt(0) === '#'){ kept.push(ln); return; }
+    if (ln.toLowerCase().indexOf(low) >= 0){ kept.push(ln); n++; }
+  });
+  out.value = kept.join('\n');
+  hit.textContent = '匹配 ' + n + ' 行';
+}
+
+/* 系统日志里 ── xxx ── 是分段标题，跟 # 表头一样当结构行保留：
+   否则搜「串口」会把标题也捞出来，命中数虚高，看着像匹配到了一堆。 */
+function syFilter(){
+  const q = ($('sysearch').value || '').trim();
+  const out = $('syout'), hit = $('syhit');
+  if (!q){ out.value = SY_RAW; hit.textContent = ''; return; }
+  const low = q.toLowerCase();
+  const kept = [];
+  let n = 0;
+  SY_RAW.split('\n').forEach(function(ln){
+    const t = ln.trim();
+    if (t.charAt(0) === '#' || t.indexOf('──') === 0){ kept.push(ln); return; }
+    if (ln.toLowerCase().indexOf(low) >= 0){ kept.push(ln); n++; }
+  });
+  out.value = kept.join('\n');
+  hit.textContent = '匹配 ' + n + ' 行';
+}
+
+function glWinSec(){
+  const n = parseFloat($('glwin').value);
+  if (isNaN(n) || n <= 0) return null;
+  return n * parseFloat($('glunit').value || '1');
+}
+
+async function glGo(){
+  const st = $('glst'), out = $('glout');
+  const t = glReadTime();
+  if (t === null){
+    st.style.color = 'var(--warn)';
+    st.textContent = '基准时间没填完整（年月日时分秒都要填，且日期要真实存在）';
+    return;
+  }
+  const win = glWinSec();
+  if (win === null){
+    st.style.color = 'var(--warn)';
+    st.textContent = '前后时间窗要填大于 0 的数';
+    return;
+  }
+  const srcs = glSrcKeys();
+  if (!srcs.length){
+    st.style.color = 'var(--warn)';
+    st.textContent = '至少勾选一个日志来源';
+    return;
+  }
+  $('glgo').disabled = true;
+  st.style.color = '';
+  st.textContent = '车端提取中…';
+  try{
+    const r = await fetch('/api/glog', {method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({t:t, win:win, lv:$('gllv').value || '', srcs:srcs})});
+    const j = await r.json();
+    glRender(j, t, win);
+  }catch(e){
+    st.style.color = 'var(--warn)';
+    st.textContent = '请求失败：' + (e && e.message ? e.message : e);
+  }finally{
+    $('glgo').disabled = false;
+  }
+}
+
+function glRender(j, t, win){
+  const st = $('glst'), out = $('glout');
+  if (!j.ok){
+    st.style.color = 'var(--warn)';
+    st.textContent = j.err || '提取失败';
+    glSetOut('');
+    return;
+  }
+  const head = [];
+  head.push('# 时间窗 ' + glFmt(t - win) + ' ~ ' + glFmt(t + win)
+            + '（±' + win + 's）');
+  const dirs = j.dirs || [];
+  for (let i = 0; i < dirs.length; i++){
+    const d = dirs[i];
+    if (d.err){
+      head.push('# ' + d.label + '：' + d.err + '（' + d.dir + '）');
+    }else{
+      head.push('# ' + d.label + '：目录共 ' + d.total + ' 个文件，'
+                + '命中候选 ' + d.picked.length + ' 个，取出 ' + d.nline + ' 行');
+      const fl = glFileList(d, '#   ');
+      if (fl) head.push(fl);
+      if (d.noscan) head.push('#   另有 ' + d.noscan
+                + ' 个文件因认不出时间、且不是最近修改的而未扫');
+    }
+  }
+  if (j.trunc) head.push('# 行数超过上限，只回了前 ' + GLOGCAP_LINES + ' 行');
+
+  const lines = j.lines || [];
+  if (!lines.length){
+    // 没有命中：把「为什么没有」讲清楚，并指出最近的日志落在哪份文件
+    head.push('# 该时间段内没有任何日志行');
+    for (let i = 0; i < dirs.length; i++){
+      const d = dirs[i];
+      if (d.err) continue;
+      if (d.before) head.push('#   ' + d.label + ' 最近的一份（早于起点）：'
+                              + d.before.name + ' 开始于 ' + d.before.t);
+      if (d.after)  head.push('#   ' + d.label + ' 下一份（晚于终点）：'
+                              + d.after.name + ' 开始于 ' + d.after.t);
+      if (!d.before && !d.after){
+        head.push('#   ' + d.label + ' 目录下没有任何带时间的 glog 文件');
+      }
+      const fl = glFileList(d, '#   ' + d.label + ' ');
+      if (fl) head.push(fl);
+    }
+    glSetOut(head.join('\n'));
+    st.style.color = 'var(--warn)';
+    st.textContent = '未找到该时间段的日志（已扫描 ' + (j.nfile || 0) + ' 个候选文件）';
+    return;
+  }
+  const body = lines.map(function(L){
+    // 前缀直接用目录名：输出要能对着终端 ls 找到那一份文件
+    return '[' + L.k + '] ' + L.x;
+  });
+  glSetOut(head.join('\n') + '\n' + body.join('\n'));
+  st.style.color = '';
+  st.textContent = '命中 ' + j.nline + ' 行 / 扫描 ' + j.nfile + ' 个文件'
+                 + (j.trunc ? '（已截断）' : '');
+}
+
+function glNow(){
+  const d = S.lastData;
+  if (!d || !d.t){
+    $('glst').style.color = 'var(--warn)';
+    $('glst').textContent = '还没有车端数据，请先连接';
+    return;
+  }
+  glSetTime(d.t);
+  $('glst').style.color = '';
+  $('glst').textContent = '已填入车端当前时间 ' + glFmt(d.t);
+}
+
+/* 不再挂按钮：页面默认就填本机时间，再放个按钮反而让人以为要手动点一下。
+   排查车上的问题时真正要的是「车端当前时间」，那个按钮保留。 */
+function glFillLocal(){
+  glSetTime(Date.now() / 1000);
+}
+
+function glCopy(){
+  const v = $('glout').value;
+  if (!v){ $('glst').textContent = '没有内容可复制'; return; }
+  try{
+    navigator.clipboard.writeText(v);
+    $('glst').style.color = '';
+    $('glst').textContent = '已复制到剪贴板';
+  }catch(e){
+    $('glst').style.color = 'var(--warn)';
+    $('glst').textContent = '复制失败，请手动全选复制';
+  }
+}
+
+function glDownload(){
+  const v = $('glout').value;
+  if (!v){ $('glst').textContent = '没有内容可下载'; return; }
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([v], {type:'text/plain;charset=utf-8'}));
+  a.download = 'glog_' + glFmt(Date.now() / 1000).replace(/[-: ]/g, '') + '.txt';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(function(){ URL.revokeObjectURL(a.href); }, 3000);
+}
+
+$('glgo').onclick = glGo;
+$('glnow').onclick = glNow;
+$('glsearch').oninput = glFilter;
+$('glsclr').onclick = function(){ $('glsearch').value = ''; glFilter(); };
+$('glcopy').onclick = glCopy;
+$('gldl').onclick = glDownload;
+$('glall').onclick = function(){ glSetSrcs(function(){ return true; }); };
+$('glnone').onclick = function(){ glSetSrcs(function(){ return false; }); };
+$('gldef').onclick = function(){
+  glSetSrcs(function(x){ return GL_DEF.indexOf(x) >= 0; });
+};
+
+/* ── 系统日志（dmesg / 串口断连 / system 目录） ──
+   复用上面同一个时间窗，不再让用户输入第二遍时间 —— 这两类日志
+   本来就是同一次故障要对照看的，时间必须一致才对得上。 */
+async function syGo(){
+  const st = $('syst'), out = $('syout');
+  const t = glReadTime();
+  if (t === null){
+    st.style.color = 'var(--warn)';
+    st.textContent = '基准时间没填完整（用上面 glog 那一组时间框）';
+    return;
+  }
+  const win = glWinSec();
+  if (win === null){
+    st.style.color = 'var(--warn)';
+    st.textContent = '前后时间窗要填大于 0 的数';
+    return;
+  }
+  $('sygo').disabled = true;
+  st.style.color = '';
+  st.textContent = '车端提取中…（dmesg 可能要几秒）';
+  try{
+    const r = await fetch('/api/syslog', {method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({t:t, win:win})});
+    const j = await r.json();
+    syRender(j, t, win);
+  }catch(e){
+    st.style.color = 'var(--warn)';
+    st.textContent = '请求失败：' + (e && e.message ? e.message : e);
+  }finally{
+    $('sygo').disabled = false;
+  }
+}
+
+function sySec(title, arr, pad){
+  const s = [pad + '── ' + title + '（' + arr.length + ' 行）──'];
+  for (let i = 0; i < arr.length; i++){
+    const it = arr[i];
+    const pre = it.t > 0 ? glFmt(it.t) + ' ' : '';
+    s.push(pad + '  ' + pre + it.x);
+  }
+  return s;
+}
+
+function syRender(j, t, win){
+  const st = $('syst'), out = $('syout');
+  if (!j.ok){
+    st.style.color = 'var(--warn)';
+    st.textContent = j.err || '提取失败';
+    sySetOut('');
+    return;
+  }
+  const h = [];
+  h.push('# 时间窗 ' + glFmt(t - win) + ' ~ ' + glFmt(t + win) + '（±' + win + 's）');
+  if (j.dm_note) h.push('# dmesg：' + j.dm_note);
+  h.push('# dmesg 共 ' + (j.dm_all || 0) + ' 行，其中 '
+       + (j.dm_ts || 0) + ' 行能读出墙钟时间');
+  h.push('# system 目录已并入上方来源清单（勾 system 就跟 glog 一起出），'
+       + '本框只留 dmesg 与串口/USB 断连');
+  if (j.trunc) h.push('# 行数超过上限，各组只回了前若干行');
+
+  const dm = j.dmesg || [], sr = j.serial || [];
+  const body = [].concat(sySec('dmesg', dm, ''))
+                 .concat(sySec('串口 / USB 断连', sr, ''));
+  if (!j.nline){
+    body.push('（该时间窗内三类都没有命中任何行）');
+  }
+  sySetOut(h.join('\n') + '\n' + body.join('\n'));
+  st.style.color = j.nline ? '' : 'var(--warn)';
+  st.textContent = j.nline
+    ? ('dmesg ' + dm.length + ' 行 / 串口 USB 断连 ' + sr.length + ' 行')
+    : '该时间段内没有系统日志';
+}
+
+function syCopy(){
+  const v = $('syout').value;
+  if (!v){ $('syst').textContent = '没有内容可复制'; return; }
+  try{
+    navigator.clipboard.writeText(v);
+    $('syst').style.color = '';
+    $('syst').textContent = '已复制到剪贴板';
+  }catch(e){
+    $('syst').style.color = 'var(--warn)';
+    $('syst').textContent = '复制失败，请手动全选复制';
+  }
+}
+
+function syDownload(){
+  const v = $('syout').value;
+  if (!v){ $('syst').textContent = '没有内容可下载'; return; }
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([v], {type:'text/plain;charset=utf-8'}));
+  a.download = 'syslog_' + glFmt(Date.now() / 1000).replace(/[-: ]/g, '') + '.txt';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(function(){ URL.revokeObjectURL(a.href); }, 3000);
+}
+
+$('sygo').onclick = syGo;
+$('sycpy').onclick = syCopy;
+$('sydl').onclick = syDownload;
+$('sysearch').oninput = syFilter;
+$('sysclr').onclick = function(){ $('sysearch').value = ''; syFilter(); };
+
+/* 打开页面就填本机时间并建好来源清单：
+   空着六个框等用户手敲，第一个动作就是障碍。连上车后点「车端当前时间」即可。
+   默认一个都不勾 —— 十几个目录全勾上车端扫得久，让用户自己选。 */
+glBuildSrcs();
+glFillLocal();
+
+/* ── 车机终端 ──
+   输出按 offset 增量拉取：服务端一直累积，页面只取没看过的那一段。
+   0.4 秒一轮是因为命令输出是流式的，1 秒一轮敲命令会有明显滞后感。 */
+var T = {on:false, ready:false, failed:false, remoteCols:null, remoteRows:null, since:0, view:null,
+         queue:Promise.resolve(), epoch:0, polling:false};
+
+/* 终端由远程 shell 维护编辑状态；浏览器仅按顺序转发按键和渲染输出。 */
+function tmInitView(){
+  if (T.view) return;
+  if (typeof Terminal === 'undefined') throw new Error('终端组件未加载，请检查工具箱文件是否完整');
+  T.view = new Terminal({cols:100, rows:18, fontSize:13, lineHeight:1.45, fontFamily:'Consolas, monospace',
+    cursorBlink:true, scrollback:5000,
+    theme:{background:'#111b2b', foreground:'#d3dfef', cursor:'#8db8ff', selectionBackground:'#36547a'}});
+  $('tmout').textContent = '';
+  // open 创建可处理光标、退格和补全菜单的终端显示区。
+  T.view.open($('tmout'));
+  T.view.attachCustomKeyEventHandler(function(e){
+    // Shift+Tab 保留浏览器焦点导航；普通 Tab 交给远程 shell。
+    return !(e.key === 'Tab' && e.shiftKey);
+  });
+  T.view.onData(function(data){
+    if (T.on && T.ready) tmSendRaw(data); // 原样转发 Tab、方向键和 Ctrl+C。
+  });
+  new ResizeObserver(tmFit).observe($('tmout')); // 工作区切换或窗口变化后同步尺寸。
+}
+
+function tmFit(){
+  if (!T.view || !T.ready) return;
+  const box = $('tmout');
+  if (box.clientWidth < 40 || box.clientHeight < 40) return;
+  const screen = box.querySelector('.xterm-screen');
+  if (!screen) return;
+  // getBoundingClientRect 读取 xterm 实际渲染尺寸，包含字体度量和像素取整，
+  // 避免按字号估算行高偏小，导致最后一行提示符与光标被容器裁切。
+  const rect = screen.getBoundingClientRect();
+  const cellWidth = rect.width / T.view.cols, cellHeight = rect.height / T.view.rows;
+  if (!(cellWidth > 0 && cellHeight > 0)) return;
+  const style = getComputedStyle(box); // 读取响应式样式下的真实内边距。
+  const width = box.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
+  const height = box.clientHeight - parseFloat(style.paddingTop) - parseFloat(style.paddingBottom);
+  const cols = Math.max(20, Math.min(400, Math.floor((width - 16) / cellWidth)));
+  const rows = Math.max(5, Math.min(120, Math.floor((height - 2) / cellHeight)));
+  if (T.remoteCols === cols && T.remoteRows === rows) return;
+  T.remoteCols = cols; T.remoteRows = rows;
+  T.view.resize(cols, rows); // 本地显示与远程 PTY 使用相同行列数，避免底部留白。
+  tmRequest({act:'resize', cols:cols, rows:rows}); // 尺寸与按键共用队列，避免请求乱序。
+}
+
+function tmStatus(t, cls){
+  const e = $('tmst');
+  if (e){ e.textContent = t; e.className = cls || 'dim'; }
+}
+
+async function tmStart(){
+  $('tmstart').disabled = true;
+  try{
+    tmInitView(); // 初始化终端组件，缺少资源时在连接前明确报错。
+    const r = await fetch('/api/term', {method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({act:'start'})});
+    const j = await r.json();
+    if (!j.ok){
+      tmStatus('打开失败：' + (j.err || '未知'), 'err');
+      $('tmstart').disabled = false;
+      return;
+    }
+    T.epoch++; T.on = true; T.ready = false; T.failed = false; T.remoteCols = null;
+    T.since = 0;
+    T.view.reset(); // 新 shell 清除上一会话的屏幕与光标状态。
+    $('tmstop').disabled = false;
+    $('tmintr').disabled = false;
+    tmStatus('正在连接远程 shell…', 'dim');
+  }catch(e){
+    tmStatus('请求失败：' + e, 'err');
+    $('tmstart').disabled = false;
+  }
+}
+
+async function tmStop(){
+  try{
+    await fetch('/api/term', {method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({act:'stop'})});
+  }catch(e){}
+  T.epoch++; T.on = false; T.ready = false;
+  $('tmstart').disabled = false;
+  $('tmstop').disabled = true;
+  $('tmintr').disabled = true;
+
+
+  tmStatus('已关闭', 'dim');
+}
+
+function tmRequest(body){
+  const epoch = T.epoch;
+  // 串行发送：快速输入时不能让后一个按键先到达，也不重试可能已送达的命令。
+  T.queue = T.queue.then(async function(){
+    if (!T.on || !T.ready || epoch !== T.epoch) return false;
+    try{
+      const r = await fetch('/api/term', {method:'POST',
+        headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
+      const j = await r.json();
+      if (!j.ok) throw new Error(j.err || '终端请求失败');
+      return true;
+    }catch(e){
+      T.ready = false; // 发送失败后停止后续按键，避免执行残缺命令。
+      T.failed = true;
+      $('tmstart').disabled = false;
+
+
+      tmStatus('发送失败，请重新打开终端：' + e, 'err');
+      return false;
+    }
+  });
+  return T.queue;
+}
+
+function tmSendRaw(cmd){
+  return tmRequest({act:'send', cmd:cmd}); // 普通输入和控制键均走同一连接。
+}
+
+async function tmPoll(){
+  if (!T.on || T.polling) return;
+  T.polling = true;
+  const epoch = T.epoch;
+  try{
+    const r = await fetch('/api/term?since=' + T.since, {cache:'no-store'});
+    const j = await r.json();
+    if (epoch !== T.epoch || !T.on) return;
+    if (j.reset) T.view.reset(); // 缓冲裁剪后重新建立终端显示状态。
+    if (j.txt) T.view.write(j.txt); // xterm 解析原始 PTY 输出，保留补全后的光标位置。
+    if (j.ready && !T.ready && !T.failed){
+      T.ready = true;
+
+
+      tmFit(); // shell 就绪后将当前显示宽度同步到远端。
+      tmStatus('已连接（shell 状态会保留，Tab 补全）', 'ok');
+      T.view.focus();
+    }
+    T.since = (j.len != null) ? j.len : T.since;
+    if (j.err){ tmStatus('错误：' + j.err, 'err'); }
+    if (!j.running && T.on){
+      T.on = false; T.ready = false;
+      $('tmstart').disabled = false;
+      $('tmstop').disabled = true;
+      $('tmintr').disabled = true;
+
+
+      if (!j.err) tmStatus('shell 已退出', 'dim');
+    }
+  }catch(e){}
+  finally{ T.polling = false; }
+}
+
+function renderDisk(dk){
+  const box = $('disk');
+  if (!box) return;
+  if (!dk){
+    box.innerHTML = '<div class="card"><h2>磁盘</h2>'
+      + '<div class="warn" style="font-size:11.5px">未获取到磁盘数据'
+      + '（服务端没有返回该字段，多半是本地服务还是旧版）。</div></div>';
+    return;
+  }
+  const t = dk.total, du = dk.du || {};
+  let h = '<div class="card"><h2>磁盘</h2>';
+  if (!t){
+    h += '<div class="dim" style="font-size:11.5px">无法读取磁盘容量</div>';
+  }else{
+    h += '<div style="font-size:12.5px"><b>' + gb(t.used) + ' / ' + gb(t.total)
+       + ' GB</b> <span class="dim">已用 ' + t.pct + '% · 可用 '
+       + gb(t.free) + ' GB · 挂载点 ' + esc(t.mount) + '</span></div>'
+       + '<div class="diskbar"><i style="width:' + Math.min(100, t.pct)
+       + '%"></i></div>';
+    if (t.pct >= 90){
+      h += '<div class="err" style="font-size:11.5px">⚠ 磁盘即将写满，'
+         + '请尽快清理 bag / 日志</div>';
+    }
+  }
+  h += '<div style="display:flex;align-items:center;gap:8px;margin-top:2px">'
+     + '<span style="font-size:11px" class="dim">目录大小</span>'
+     + '<button class="sec" id="duref" style="padding:2px 9px;font-size:11px">'
+     + '重新统计</button>'
+     + '<span class="dim" style="font-size:11px">'
+     + (du.busy ? '统计中…' : (du.at ? '上次耗时 ' + du.sec + ' 秒' : ''))
+     + '</span></div>';
+  h += '<div style="border:1px solid var(--line);border-radius:5px;'
+     + 'overflow:hidden;margin-top:5px">';
+  if (du.busy && !(du.items || []).length){
+    h += '<div class="durow"><span class="dim" style="font-size:11.5px">'
+       + '首次统计中…（/usr 这类大目录要十几秒到一分钟）</span></div>';
+  }else if (!(du.items || []).length){
+    h += '<div class="durow"><span class="dim" style="font-size:11.5px">'
+       + '暂无统计结果</span></div>';
+  }else{
+    du.items.forEach(function(it){
+      h += '<div class="durow"><span class="dunm">' + esc(it.dir) + '</span>'
+         + '<span class="dusz">' + (it.ok ? humanBytes(it.bytes) : '—') + '</span>'
+         + '<span class="dim" style="font-size:11px">'
+         + (it.ok ? '' : esc(it.err)) + '</span></div>';
+    });
+  }
+  h += '</div></div>';
+  box.innerHTML = h;
+  const b = $('duref');
+  if (b) b.onclick = duRefresh;
+}
+
+/* ── 自定义话题 ──
+   想看什么话题就填什么，内容原样展示。
+   注意：内容过大时车端会截断并注明，不会悄悄少给。 */
+function renderCustom(c){
+  const box = $('ctlist');
+  if (!box) return;
+  const keys = c ? Object.keys(c) : [];
+  if (!keys.length){
+    box.innerHTML = '<div class="dim" style="font-size:11.5px">'
+                  + '还没订阅任何话题</div>';
+    return;
+  }
+  let h = '';
+  keys.forEach(function(t){
+    const st = c[t] || {};
+    h += '<div style="border:1px solid var(--line);border-radius:5px;'
+       + 'overflow:hidden;margin-bottom:8px">';
+    h += '<div class="ctrow"><span class="cttag ' + (st.ok ? 'on' : 'off') + '">'
+       + (st.ok ? '已订阅' : '未收到') + '</span>'
+       + '<span class="ctnm">' + esc(t) + '</span>'
+       + '<button class="ctclose" data-t="' + esc(t) + '" title="取消订阅">×</button>'
+       + '</div>';
+    if (st.type){
+      h += '<div class="ctrow"><span class="ctype">' + esc(st.type) + '</span></div>';
+    }
+    if (st.err){
+      h += '<div class="ctrow"><span class="warn" style="font-size:11.5px">'
+         + esc(st.err) + '</span></div>';
+    }
+    if (st.fields){
+      h += '<div class="jsonbox">' + esc(JSON.stringify(st.fields, null, 1))
+         + '</div>';
+    }else if (st.ok){
+      h += '<div class="ctrow"><span class="dim" style="font-size:11.5px">'
+         + '已订阅，暂无消息</span></div>';
+    }
+    if (st.note){
+      h += '<div class="ctrow"><span class="warn" style="font-size:11px">'
+         + esc(st.note) + '</span></div>';
+    }
+    h += '</div>';
+  });
+  box.innerHTML = h;
+  box.querySelectorAll('.ctclose').forEach(function(b){
+    b.onclick = function(){ ctDel(b.getAttribute('data-t')); };
+  });
+}
+
+async function ctAdd(){
+  const el = $('ctname');
+  const t = (el.value || '').trim();
+  if (!t){ setMsg('请先填话题名', 'err'); return; }
+  try{
+    const r = await fetch('/api/custom', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({act:'add', topic:t})});
+    const j = await r.json();
+    if (!j.ok){ setMsg('订阅失败：' + (j.err || '未知错误'), 'err'); return; }
+    el.value = '';
+    setMsg('已请求订阅 ' + (j.topic || t) + '，等 1~2 秒出内容', 'ok');
+  }catch(e){ setMsg('请求失败：' + e, 'err'); }
+}
+async function ctDel(t){
+  try{
+    await fetch('/api/custom', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({act:'del', topic:t})});
+  }catch(e){}
+}
+async function duRefresh(){
+  try{
+    await fetch('/api/custom', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({act:'du'})});
+  }catch(e){}
+}
+
+/* 秒 → 「1小时 5分钟」这种人能读的长度 */
+function fmtSec(s){
+  s = Math.max(0, Math.floor(s || 0));
+  if (s < 60) return s + ' 秒';
+  const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60);
+  return (h ? h + ' 小时 ' : '') + m + ' 分钟';
+}
+
+/* ── 采集频率 ── */
+const HZ_CHOICES = [0.1, 0.5, 1, 2, 5, 10];
+function renderHz(){
+  const box = $('hzbox');
+  if (!box) return;
+  box.innerHTML = HZ_CHOICES.map(v =>
+      '<button class="sec hzbtn" data-hz="' + v + '" '
+    + 'style="padding:4px 8px;font-size:11.5px">' + v + ' Hz</button>').join('');
+  box.querySelectorAll('.hzbtn').forEach(b => {
+    b.onclick = () => setHz(parseFloat(b.getAttribute('data-hz')));
+  });
+  markHz(1);
+}
+function markHz(cur){
+  // 频率改了要等车端下一帧才回传，所以用界面选中的值兜底，
+  // 否则按钮会先闪回旧值再跳回来。
+  const v = (cur != null) ? cur : (S.pendingHz != null ? S.pendingHz : 1);
+  document.querySelectorAll('.hzbtn').forEach(b => {
+    const bv = parseFloat(b.getAttribute('data-hz'));
+    const on = Math.abs(bv - v) < 0.001;
+    b.style.opacity = on ? '1' : '0.45';
+    b.style.borderColor = on ? 'var(--ok, #3ddc97)' : '';
+    b.style.fontWeight = on ? '600' : '';
+  });
+}
+async function setHz(v){
+  try{
+    const r = await fetch('/api/set_hz', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({hz: v})});
+    const j = await r.json();
+    if (!j.ok){ setMsg('改频率失败：' + (j.err || '未知错误'), 'warn'); return; }
+    S.pendingHz = v;
+    markHz(v);
+    setMsg('采集频率已改为 ' + v + ' Hz', 'ok');
+  }catch(e){ setMsg('改频率失败：' + e, 'err'); }
+}
+
+function renderVers(d){
+  const box = $('vers');
+  if (!d){ box.innerHTML = ''; return; }
+
+  const sw   = d.swver || null;
+  const hw   = d.hw || null;
+  const slam = d.slam || null;
+  const hwf   = (hw && hw.fields) ? hw.fields : {};
+  const slf   = (slam && slam.fields) ? slam.fields : {};
+
+  const swv = sw ? sw.version : '';
+  const fwv = hasVal(hwf.Version) ? String(hwf.Version) : '';
+  const slv = hasVal(slf.sw_version) ? String(slf.sw_version) : '';
+
+  // 软件版本的来源显示文件名（哪个工作空间读到的），便于核对是不是这台车
+  let swNote = srcNote(sw, sw ? shortSrc(sw.src) : '');
+  if (sw && sw.ok && !hasVal(swv)) swNote = '已找到文件，无 version 字段';
+
+  let fwNote = srcNote(hw, '/hardware_state',
+                       (hw && hw.ok && !hasVal(fwv)) ? '话题已订阅，暂无消息' : '');
+  if (hw && !hw.ok && !hw.err) fwNote = '正在订阅话题…';
+
+  let slNote = srcNote(slam, '/slam_a_status',
+                       (slam && slam.ok && !hasVal(slv)) ? '话题已订阅，暂无消息' : '');
+  if (slam && !slam.ok && !slam.err) slNote = '正在订阅话题…';
+
+  box.innerHTML =
+      '<div class="card"><h2>版本信息</h2><div class="vergrid">'
+    + verCell('软件版本', swv, hasVal(swv) ? 'cool' : '', swNote)
+    + verCell('固件版本', fwv, hasVal(fwv) ? 'cool' : '', fwNote)
+    + verCell('SLAM版本', slv, hasVal(slv) ? 'cool' : '', slNote)
+    + '</div></div>';
+}
+
+/* /home/aoting/hrg_bee_dev_v3/version.yaml -> hrg_bee_dev_v3/version.yaml */
+function shortSrc(p){
+  if (!p) return '';
+  const parts = String(p).split('/').filter(Boolean);
+  return parts.slice(-2).join('/');
+}
+
+/* ── 硬件状态 /hardware_state ──
+   字段含义是各项目约定的，写死在这里；但取值走全量 dict，
+   消息将来加字段不会让这一块整体失败，只是新字段不显示而已。
+   固件版本不在这里 —— 它属于"版本"那一栏，跟软件/SLAM 版本对着看。 */
+function renderHw(hw){
+  const box = $('hw');
+  if (!hw){ box.innerHTML = ''; return; }
+  let h = '<div class="card"><h2>硬件状态（'
+        + esc(hw.topic || '/hardware_state') + '）</h2>';
+
+  // 和故障同一套处理：没订阅上时 err 是状态说明，不能显示成"无数据"
+  if (!hw.ok || hw.err){
+    h += '<div class="dim" style="font-size:11.5px">'
+       + esc(hw.err || '正在订阅话题…') + '</div></div>';
+    box.innerHTML = h;
+    return;
+  }
+
+  const f = hw.fields || {};
+  const charging = num(f.bat_state) === 1;
+  const estop    = num(f.e_stop) === 1;
+  const manual   = f.manual === true || f.manual === 'True';
+
+  const volt = num(f.bat_voltage);
+  const amps = num(f.bat_current);
+  const pctFake = num(f.bat_percentage);
+  const pctReal = num(f.bat_real_percentage);
+
+  // 电压：欠压红、满电青。真实电量低电量红、半电黄。
+  let vCls = '';
+  if (volt !== null){
+    if (volt < 22) vCls = 'bad';
+    else if (volt >= 29) vCls = 'cool';
+  }
+  let rCls = '';
+  if (pctReal !== null){
+    if (pctReal < 20) rCls = 'bad';
+    else if (pctReal < 50) rCls = 'warnc';
+  }
+
+  h += '<div class="hwgrid">'
+     + hwCell('充电状态', charging ? '充电中' : '未充电', '',
+              charging ? 'warnc' : 'good')
+     + hwCell('电池电压', volt === null ? '-' : volt.toFixed(2), 'V', vCls)
+     + hwCell('电池电流', amps === null ? '-' : amps.toFixed(2), 'A', '')
+     + hwCell('虚标电量', pctFake === null ? '-' : pctFake.toFixed(0), '%', '')
+     + hwCell('真实电量', pctReal === null ? '-' : pctReal.toFixed(0), '%', rCls)
+     + hwCell('运行模式', manual ? '手动' : '自动', '', manual ? 'cool' : 'good')
+     + hwCell('急停', estop ? '按下' : '正常', '', estop ? 'bad' : 'good')
+     + hwCell('清洁模式',
+              (f.clean_device_mode === '' || f.clean_device_mode === null
+               || f.clean_device_mode === undefined)
+                ? '-' : String(f.clean_device_mode), '', '')
+     + '</div>';
+  h += '</div>';
+  box.innerHTML = h;
+}
+
+/* ── 故障信息 ──
+   event_level 的语义各项目可能不一样，所以这里不猜"哪个级别叫什么"，
+   只按数值给颜色（3 最严重），数字本身照原样显示出来。 */
+const LV_CLS = {3:'l3', 2:'l2', 1:'l1'};
+function lvCls(v){ return LV_CLS[v] || 'l0'; }
+
+function renderFaults(f){
+  const box = $('faults');
+  if (!f){
+    box.innerHTML = '';
+    return;
+  }
+  let h = '<div class="card"><h2>故障信息（' + esc(f.topic || '/diagnose_faults') + '）</h2>';
+
+  // 没订阅上时 err 是状态说明（可能只是"还在等话题"），不是错误。
+  // 这里不能显示成"当前无故障" —— 那会让人以为机器真的没故障。
+  if (!f.ok){
+    h += '<div class="dim" style="font-size:11.5px">'
+       + (f.err ? esc(f.err) : '正在订阅话题…') + '</div></div>';
+    box.innerHTML = h;
+    return;
+  }
+  if (f.err){
+    h += '<div class="dim" style="font-size:11.5px">' + esc(f.err) + '</div></div>';
+    box.innerHTML = h;
+    return;
+  }
+  const items = f.items || [];
+  const lv = (f.level === null || f.level === undefined) ? null : f.level;
+  h += '<div class="fh">';
+  if (lv !== null) h += '<span class="lv ' + lvCls(lv) + '">总级别 ' + esc(lv) + '</span>';
+  h += '<span class="dim" style="font-size:11.5px">共 ' + items.length + ' 条'
+     + (f.type ? ' · ' + esc(f.type) : '') + '</span></div>';
+
+  if (!items.length){
+    h += '<div class="empty">当前无故障</div>';
+  } else {
+    h += '<div class="flist">';
+    items.forEach(a => {
+      // 十六进制为主（码表常用），十进制保留在旁，省得心算
+      const hasCode = !(a.code === null || a.code === undefined);
+      const main = a.codeHex || (hasCode ? String(a.code) : '-');
+      const sub  = (a.codeHex && hasCode) ? ' (' + a.code + ')' : '';
+      h += '<div class="fitem ' + lvCls(a.level) + '">'
+         + '<div class="fcode">' + esc(main)
+         + (sub ? '<span class="hwu">' + esc(sub) + '</span>' : '') + '</div>'
+         + '<div class="fdata">' + esc(a.data || '(无描述)') + '</div>'
+         + '<div class="fmeta">' + esc(a.node || '') + '<br>' + esc(a.tstr || '') + '</div>'
+         + '</div>';
+    });
+    h += '</div>';
+  }
+  h += '</div>';
+  box.innerHTML = h;
+}
+
+/* 工作区保持可导航；连接相关工具沿用连接条件，离线时显示状态说明。 */
+function setConnView(on){
+  const changed = S.connected !== on;
+  S.connected = on;
+  updateWorkspaceVisibility();
+  if (changed) resizeWorkspace();
+  // 「保存当前」只在连上之后才有意义：连都没连上，记下来的
+  // 多半是个错的端口，反而在下拉里留一堆噪音。
+  const bs = $('bsave');
+  if (bs) bs.disabled = !on;
+}
+
+async function poll(){
+  try{
+    const r = await fetch('/api/stat', {cache:'no-store'});
+    const j = await r.json();
+    setConnView(!!j.connected);
+    if (j.connected && j.data){ S.lastData = j.data; render(j.data); }
+    else if (!j.connected || !S.lastData){ render(null); }
+
+    if (j.err) setMsg('采集失败：'+j.err, 'err');
+    else if (j.expired){ setMsg('已达单次上限，已自动断开。需要继续就再点一次「连接」。', 'warn'); }
+    else if (j.connected && j.data){
+      const age = j.age || 0;
+      let t = '采集中 · ' + (age < 5 ? '实时' : (age.toFixed(1)+' 秒前的数据'));
+      if (j.left != null && j.left < 180) t += ' · 剩余 ' + fmtLeft(j.left);
+      setMsg(t, j.left != null && j.left < 60 ? 'warn' : 'ok');
+    }
+
+    const lf = (j.left != null) ? Math.max(0, j.left) : null;
+    setAlert(j.connected && lf != null && lf <= ALERT_SEC, lf);
+    $('st').textContent = j.connected
+      ? '已连接' + (lf != null ? ' · 剩余 ' + fmtLeft(lf) : '')
+      : (j.expired ? '已超时断开（车端采集已清理）' : '未连接');
+    $('st').className = !j.connected ? 'dim'
+      : (lf != null && lf <= WARN_SEC ? 'warn' : 'ok');
+    $('sessionleft').textContent = j.connected && lf != null ? fmtLeft(lf) : '--:--';
+    $('sessionleft').className = j.connected && lf != null && lf <= WARN_SEC ? 'warn' : '';
+    $('machine-label').textContent = j.connected
+      ? ((j.data && j.data.host) || $('host').value) + ':' + $('port').value
+      : '尚未连接机器';
+    $('bconn').disabled = !!j.connected;
+    $('bdisc').disabled = !j.connected;
+    $('bext').disabled = !j.connected;
+    if (!j.connected){ S.lastData = null; S.connAt = 0; }
+  }catch(e){
+    setConnView(false);
+    S.lastData = null;
+    render(null);
+    setAlert(false);
+    $('bconn').disabled = false;
+    $('bdisc').disabled = true;
+    $('bext').disabled = true;
+    $('sessionleft').textContent = '--:--';
+    $('machine-label').textContent = '本地服务不可用';
+    $('st').textContent = '服务未运行';
+    $('st').className = 'err';
+    setMsg('连不上本地服务（点「日志」看不到内容时，检查黑窗口是否还在）', 'err');
+  }
+}
+
+async function refreshLog(){
+  try{
+    const r = await fetch('/api/logs?since=' + S.since, {cache:'no-store'});
+    const j = await r.json();
+    if (j.lines && j.lines.length){
+      const e = $('log');
+      e.textContent += j.lines.join('\n') + '\n';
+      e.scrollTop = e.scrollHeight;
+    }
+    if (j.seq != null) S.since = j.seq;
+  }catch(e){}
+}
+
+async function connect(){
+  const host = $('host').value.trim();
+  const port = parseInt($('port').value, 10);
+  const pwd  = $('pwd').value;
+  // 用户名不再写死：默认 aoting，可改（换机器/换账号时用）。
+  const user = ($('user').value || '').trim() || 'aoting';
+  if (!host || !port){
+    $('connection-details').open = true;
+    setMsg('请填写主机和端口', 'err');
+    (!host ? $('host') : $('port')).focus();
+    return;
+  }
+  setMsg('连接中 ...', 'dim');
+  $('bconn').disabled = true;
+  try{
+    const r = await fetch('/api/connect', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({host:host, port:port, user:user, pwd:pwd})
+    });
+    const j = await r.json();
+    if (!j.ok){
+      if (j.needPwd){
+        showPwd();
+        setMsg('这台机器需要密码，请输入后再点连接', 'warn');
+      }else{
+        setMsg('连接失败：' + (j.err || '未知错误'), 'err');
+      }
+      $('bconn').disabled = false;
+    }else{
+      if (pwd){
+        try{ localStorage.setItem('st_pwd', pwd); }catch(e){}
+      }
+      try{ localStorage.setItem('st_user', user); }catch(e){}
+      S.connAt = Date.now();
+      setMsg('已连接，等待首帧 ...', 'ok');
+    }
+  }catch(e){
+    setMsg('请求失败：' + e, 'err');
+    $('bconn').disabled = false;
+  }
+}
+
+async function disconnect(){
+  $('bdisc').disabled = true;
+  await fetch('/api/disconnect', {method:'POST'});
+  S.lastData = null;
+  // 相机流走的是独立 SSH，不断开会一直挂在车上吃 CPU —— 断开时一起收掉
+  if (RGB.on){
+    RGB.on = false;
+    RGB.cams = [];
+    if (RGB.timer){ clearInterval(RGB.timer); RGB.timer = 0; }
+    const g = $('rgbgrid');
+    if (g) g.innerHTML = '';
+    RGB.cells = {};
+    rgbMsg('已断开机器，相机预览已停止');
+  }
+  render(null);
+}
+
+function copySnap(){
+  const d = S.lastData;
+  if (!d){ setMsg('还没有数据可复制', 'err'); return; }
+  let s = '远程机器状态  ' + new Date().toLocaleString('zh-CN') + '\n';
+  s += '主机: ' + d.host + '   运行: ' + fmtUp(d.up) + '\n';
+  s += 'CPU: ' + d.cpu + '%   内存: ' + d.mem_used + '/' + d.mem_total + ' MB\n';
+  s += '负载: ' + (d.load||[]).join(' / ') + '\n\n';
+  const nm = r => ((r.node||'').trim() ? (r.node + ' [' + r.name + ']') : r.name);
+  s += 'CPU TOP5:\n';
+  (d.top_cpu||[]).forEach((r,i) => { s += '  '+(i+1)+'. '+nm(r)+' (pid '+r.pid+')  '+r.cpu+'%\n'; });
+  s += '\n内存 TOP5:\n';
+  (d.top_mem||[]).forEach((r,i) => { s += '  '+(i+1)+'. '+nm(r)+' (pid '+r.pid+')  '+r.rss+' MB\n'; });
+  const sw = d.swver || null, sl = d.slam || null;
+  const slf = (sl && sl.fields) ? sl.fields : {};
+  s += '\n版本信息:\n';
+  s += '  软件版本: ' + ((sw && sw.version) || '-') + '\n';
+  const hw2 = d.hw || null;
+  const g2 = (hw2 && hw2.fields) ? hw2.fields : {};
+  s += '  固件版本: ' + (hasVal(g2.Version) ? g2.Version : '-') + '\n';
+  s += '  SLAM版本: ' + (hasVal(slf.sw_version) ? slf.sw_version : '-') + '\n';
+
+  const tk = d.task || null, qu = d.queue || null;
+  s += '\n任务状态:\n';
+  if (!tk || tk.err) s += '  当前任务: 未获取到 — ' + ((tk && tk.err) || '') + '\n';
+  else if (!tk.name && tk.status == null) s += '  当前任务: 暂无消息\n';
+  else {
+    s += '  当前任务: ' + (tk.name || '-')
+       + '   状态: ' + (tk.statusText || '-')
+       + (tk.status != null ? '(' + tk.status + ')' : '') + '\n';
+    const e = tk.echo || {};
+    if (e.task_id) s += '  任务ID: ' + e.task_id + '\n';
+    if (e.start_time) s += '  开始: ' + e.start_time + '\n';
+  }
+  if (!qu || qu.err) s += '  队列: 未获取到 — ' + ((qu && qu.err) || '') + '\n';
+  else if (!(qu.groups||[]).length) s += '  队列: 空\n';
+  else {
+    s += '  队列(' + qu.groups.length + '):\n';
+    qu.groups.forEach((g,i) => { s += '    ' + (i+1) + '. ' + g.name + '\n'; });
+  }
+
+  const nv = d.nav || null, od2 = d.odom || null, vd2 = d.nav_verdict || null;
+  s += '\n导航状态（' + ((nv && nv.topic) || '/cmd_vel') + '）:\n';
+  if (!nv) s += '  无数据\n';
+  else if (!nv.ok && nv.err) s += '  ' + nv.err + '\n';
+  else if (nv.lin_x == null && nv.ang_z == null) s += '  话题已订阅，暂无消息\n';
+  else {
+    const vx = (nv.lin_x == null) ? '-' : Number(nv.lin_x).toFixed(3);
+    const vz = (nv.ang_z == null) ? '-' : Number(nv.ang_z).toFixed(3);
+    s += '  期望线速度: ' + vx + ' m/s\n';
+    s += '  期望角速度: ' + vz + ' rad/s'
+       + ((nv.ang_z == null) ? '' : ' (' + (Number(nv.ang_z) * 180 / Math.PI).toFixed(1) + ' 度/s)')
+       + '\n';
+    s += '  ' + (nv.live ? '正在发布'
+                         : '已停止发布' + (nv.age != null ? ' ' + nv.age + ' 秒' : ''))
+       + '\n';
+  }
+  s += '  实际线速度: ' + fmtSpd(od2 && od2.lin_x) + ' m/s'
+     + (od2 && !od2.ok && od2.err ? '（' + od2.err + '）' : '') + '\n';
+  if (vd2 && vd2.stall){
+    s += '  ⚠ 疑似卡住：指令已下发但车没动，持续 ' + vd2.sec + ' 秒\n';
+  }
+
+  const asl = d.axslam || null;
+  s += '\n定位状态（' + ((asl && asl.topic) || '/ax_slam_state') + '）:\n';
+  if (!asl) s += '  无数据\n';
+  else if (asl.err) s += '  ' + asl.err + '\n';
+  else {
+    const af = asl.fields || {};
+    s += '  state=' + (af.state == null ? '-' : af.state)
+       + '  可靠=' + (boolOf(af.reliable) === null ? '-' : (boolOf(af.reliable) ? '是' : '否'))
+       + '  质量=' + (af.position_quality == null ? '-' : af.position_quality)
+       + '  匹配值=' + (af.lidar_matching_score == null ? '-' : Number(af.lidar_matching_score).toFixed(3))
+       + '  重定位=' + (boolOf(af.relocating) === null ? '-' : (boolOf(af.relocating) ? '是' : '否'))
+       + '\n';
+  }
+
+  const th = d.thermal || null, fq = d.freq || null;
+  s += '\n温度 / 频率:\n';
+  s += '  CPU 温度: ' + (th && th.ok ? th.c + ' °C' : (th && th.err) || '-') + '\n';
+  s += '  CPU 频率: ' + (fq && fq.ok ? fq.mhz + ' MHz' : (fq && fq.err) || '-') + '\n';
+
+  const dk2 = d.disk || null;
+  s += '\n磁盘:\n';
+  if (!dk2 || !dk2.total) s += '  未获取到\n';
+  else {
+    const t2 = dk2.total;
+    s += '  ' + gb(t2.used) + ' / ' + gb(t2.total) + ' GB  已用 ' + t2.pct
+       + '%  可用 ' + gb(t2.free) + ' GB\n';
+    ((dk2.du && dk2.du.items) || []).forEach(function(it){
+      s += '    ' + it.dir + '  ' + (it.ok ? humanBytes(it.bytes) : ('— ' + it.err)) + '\n';
+    });
+  }
+
+  const hw = d.hw || null;
+  s += '\n硬件状态（' + ((hw && hw.topic) || '/hardware_state') + '）:\n';
+  if (!hw) s += '  无数据\n';
+  else if (hw.err) s += '  未获取到: ' + hw.err + '\n';
+  else {
+    const g = hw.fields || {};
+    const n2 = v => { const x = parseFloat(v); return isFinite(x) ? x : null; };
+    const vv = n2(g.bat_voltage), aa = n2(g.bat_current);
+    s += '  充电: ' + (n2(g.bat_state) === 1 ? '充电中' : '未充电')
+       + '   电压: ' + (vv === null ? '-' : vv.toFixed(2)) + ' V'
+       + '   电流: ' + (aa === null ? '-' : aa.toFixed(2)) + ' A\n';
+    s += '  电量: 虚标 ' + (g.bat_percentage === undefined ? '-' : g.bat_percentage)
+       + '% / 真实 ' + (g.bat_real_percentage === undefined ? '-' : g.bat_real_percentage)
+       + '%\n';
+    s += '  模式: ' + (g.manual ? '手动' : '自动')
+       + '   急停: ' + (n2(g.e_stop) === 1 ? '按下' : '正常')
+       + '   清洁模式: ' + (g.clean_device_mode || '-') + '\n';
+  }
+  const f = d.faults || null;
+  s += '\n故障（' + ((f && f.topic) || '/diagnose_faults') + '）:\n';
+  if (!f) s += '  无数据\n';
+  else if (f.err) s += '  未获取到: ' + f.err + '\n';
+  else if (!(f.items||[]).length) s += '  当前无故障\n';
+  else f.items.forEach((a,i) => { s += '  '+(i+1)+'. ['+(a.codeHex||a.code||'-')
+      +((a.codeHex&&a.code)?' ('+a.code+')':'')+'] L'+(a.level||0)
+      +' '+(a.data||'')+'  '+(a.node||'')+' '+(a.tstr||'')+'\n'; });
+  navigator.clipboard.writeText(s).then(
+    () => setMsg('已复制到剪贴板', 'ok'),
+    () => setMsg('复制失败，请手动选中日志内容', 'err')
+  );
+}
+
+/* ── 已保存机器（连接记录）────────────────────────────────────
+   记在 8766 服务那台机器上（~/.aoting_tools/conn_profiles.json），
+   不记在浏览器 localStorage：清缓存、换浏览器、换标签页都还在，
+   也不会因为解压新版工具包（每次都是新目录）而丢掉。
+   一台车一个名字，打开工具时在下拉里选一下就连，不用再背端口号。 */
+async function profLoad(keepName){
+  try{
+    const r = await fetch('/api/profiles', {cache:'no-store'});
+    const j = await r.json();
+    const items = (j && j.items) || [];
+    const s = $('profsel');
+    s.innerHTML = '<option value="">— 选择已保存机器 —</option>';
+    items.forEach(function(it){
+      const o = document.createElement('option');
+      o.value = it.name;
+      o.textContent = it.name + '  (' + (it.user || 'aoting') + '@' + it.host + ':' + it.port + ')';
+      s.appendChild(o);
+    });
+    s.value = keepName || '';
+    $('profnote').textContent = items.length
+      ? ('共 ' + items.length + ' 台 · 选一台自动填表并连接')
+      : '还没有记录 —— 连上机器后点「保存当前」';
+    return items;
+  }catch(e){
+    $('profnote').textContent = '记录读取失败：' + e;
+    return [];
+  }
+}
+
+async function profSave(){
+  const host = $('host').value.trim();
+  const port = parseInt($('port').value, 10);
+  if (!host || !port){ setMsg('请先填写主机和端口', 'err'); return; }
+  const user = ($('user').value || '').trim() || 'aoting';
+  const pwd  = $('pwd').value;
+  const dflt = host + ':' + port;
+  const name = (window.prompt('给这台机器起个名字（下次在下拉里按名字选）', dflt) || '').trim();
+  if (!name) return;
+  try{
+    const r = await fetch('/api/profiles', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({act:'save', name:name, host:host, port:port, user:user, pwd:pwd})
+    });
+    const j = await r.json();
+    if (!j.ok){ setMsg('保存失败：' + (j.err || '未知错误'), 'err'); return; }
+    await profLoad(name);
+    setMsg('已保存「' + name + '」' + (j.replaced ? '（覆盖了同名记录）' : ''), 'ok');
+  }catch(e){ setMsg('保存失败：' + e, 'err'); }
+}
+
+async function profDel(){
+  const name = $('profsel').value;
+  if (!name){ setMsg('先在下拉里选一条记录', 'warn'); return; }
+  if (!window.confirm('删除记录「' + name + '」？只是删掉本机保存的连接信息。')) return;
+  try{
+    const r = await fetch('/api/profiles', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({act:'del', name:name})
+    });
+    const j = await r.json();
+    if (!j.ok){ setMsg('删除失败：' + (j.err || '未知错误'), 'err'); return; }
+    await profLoad('');
+    setMsg('已删除「' + name + '」', 'ok');
+  }catch(e){ setMsg('删除失败：' + e, 'err'); }
+}
+
+/* 选一台 -> 自动填表 -> 自动连接。
+   手动填完再连要三步，这一步省掉的是"每次都要翻聊天记录找端口号"。 */
+$('profsel').onchange = async function(){
+  const name = $('profsel').value;
+  if (!name) return;
+  const items = await profLoad(name);
+  let rec = null;
+  for (let i = 0; i < items.length; i++){ if (items[i].name === name) rec = items[i]; }
+  if (!rec) return;
+  $('host').value = rec.host || '';
+  $('port').value = rec.port || '';
+  $('user').value = rec.user || 'aoting';
+  $('pwd').value  = rec.pwd || '';
+  try{
+    localStorage.setItem('st_host', rec.host || '');
+    localStorage.setItem('st_port', String(rec.port || ''));
+    localStorage.setItem('st_user', rec.user || 'aoting');
+    if (rec.pwd) localStorage.setItem('st_pwd', rec.pwd);
+  }catch(e){}
+  setMsg('已载入「' + name + '」，正在连接 ...', 'ok');
+  connect();
+};
+$('bsave').onclick = profSave;
+$('bdelprof').onclick = profDel;
+profLoad('');
+
+/* ── 记住上次填的主机/端口，下次打开自动带出来 ── */
+(function(){
+  try{
+    const h = localStorage.getItem('st_host'), p = localStorage.getItem('st_port');
+    if (h) $('host').value = h;
+    if (p) $('port').value = p;
+  }catch(e){}
+  ['host','port'].forEach(k => {
+    $(''+k).addEventListener('change', () => {
+      try{ localStorage.setItem('st_'+k, $(''+k).value); }catch(e){}
+    });
+  });
+})();
+
+/* ── 密码框：常显 ──
+   原来是「免密连不上才弹出来」，但使用者根本不知道要不要输，
+   而且弹出来才填的时候已经白等一次连接超时。现在直接摆出来：
+     1) 免密机器留空即可，不影响；
+     2) 需要密码的机器，上次填过的会从本机带出来（浏览器也可能自动填充）；
+     3) 真正需要输时聚焦一下就够了。 */
+function showPwd(){
+  $('connection-details').open = true;
+  $('pwdbox').style.display = '';
+  try{ $('pwd').focus(); }catch(e){}
+}
+
+$('ctadd').onclick = ctAdd;
+$('ctname').addEventListener('keydown', function(e){
+  if (e.key === 'Enter') ctAdd();
+});
+
+(function(){
+  try{
+    const v = localStorage.getItem('st_pwd');
+    if (v) $('pwd').value = v;      // 记住的密码照样用，只是不显示框
+    const u = localStorage.getItem('st_user');
+    if (u) $('user').value = u;     // 用户名同理，默认 aoting
+  }catch(e){}
+})();
+
+(async function(){
+  try{
+    const r = await fetch('/api/version', {cache:'no-store'});
+    const j = await r.json();
+    if (j.version) $('pver').textContent = 'v' + j.version;
+    if (j.hasDefaultPwd){
+      $('pwdnote').textContent = '已内置机器凭据，无需输入密码（管理员预置）';
+    }
+  }catch(e){}
+})();
+
+$('tmstart').onclick = tmStart;
+$('tmstop').onclick = tmStop;
+$('tmintr').onclick = function(){ tmSendRaw('\x03'); };
+
+$('bconn').onclick = connect;
+$('bdisc').onclick = disconnect;
+async function doExtend(){
+  try{
+    const r = await fetch('/api/extend?sec=' + EXTEND_SEC, {cache:'no-store'});
+    const j2 = await r.json();
+    if (!j2.ok) setMsg('延长失败：' + (j2.err || '未连接'), 'warn');
+  }catch(e){ setMsg('延长失败：' + e, 'warn'); }
+}
+$('bext').onclick = doExtend;
+// 告警框本身就是延长按钮：到点前才出现，且固定在顶部，
+// 不用把页面滚回最上面找「延长」。
+$('alertb').onclick = doExtend;
+$('bcopy').onclick = copySnap;
+renderHz();
+$('pwd').addEventListener('keydown', e => { if (e.key === 'Enter') connect(); });
+
+// 每次页面加载生成独立标识，刷新后的新页面可在宽限期内接续连接。
+const monitorPageId = Date.now().toString(36) + '-' + Math.random().toString(36).slice(2);
+let monitorPageLeaving = false;
+function monitorPageAlive(){
+  if (monitorPageLeaving) return;
+  // 独立心跳不受当前工作区影响，不提交主机或密码。
+  fetch('/api/page_lifecycle', {method:'POST', headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({page:monitorPageId, act:'ping'})}).catch(function(){});
+}
+window.addEventListener('pagehide', function(){
+  monitorPageLeaving = true;
+  const body = JSON.stringify({page:monitorPageId, act:'bye'});
+  // sendBeacon 可在页面卸载后继续送出；失败时用 keepalive 请求补发。
+  if (!navigator.sendBeacon('/api/page_lifecycle', new Blob([body], {type:'application/json'}))){
+    fetch('/api/page_lifecycle', {method:'POST', headers:{'Content-Type':'application/json'},
+      body:body, keepalive:true}).catch(function(){});
+  }
+});
+window.addEventListener('pageshow', function(){
+  monitorPageLeaving = false;
+  monitorPageAlive(); // 浏览器后退缓存恢复后重新登记页面。
+});
+monitorPageAlive();
+setInterval(monitorPageAlive, 15000);
+
+initWorkspace();
+render(null);
+ensureRGBBox();     // 相机卡片常驻：没连机器也要能看到勾选框
+rgbSyncGate();      // 门禁状态决定要不要弹登录框
+setConnView(false);             // 首次 poll 返回前先只显示连接配置
+poll();
+setInterval(poll, 1000);        // 每秒一次
+setInterval(refreshLog, 1000);
+setInterval(tmPoll, 400);        // 终端输出要跟手，比状态轮询快
+refreshLog();
+</script>
+<!-- 旧服务可能读到新版页面但尚无静态资源路由，加载失败时明确提示而非留下空白按钮。 -->
+<script src="database.js" onerror="document.getElementById('dbstatus').textContent='数据库组件未加载：请重启远程机器状态监控本地服务后刷新页面，仅刷新页面无法更新旧后台。';document.getElementById('dbstatus').setAttribute('role','alert');document.querySelectorAll('#carddb button').forEach(function(button){button.disabled=true;});"></script>
+</body>
+</html>

@@ -1,0 +1,338 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>感知导航bag分析工具</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  :root {
+    --bg: #1e2126; --panel: #262a31; --panel2: #2f343d; --line: #3a4048;
+    --text: #d8dee5; --dim: #8a94a3; --accent: #00bfa5; --warn: #ff9800; --err: #ef4444;
+  }
+  html, body { height: 100%; }
+  body {
+    background: var(--bg); color: var(--text); overflow: hidden;
+    font: 13px/1.5 "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
+  }
+  #app { display: flex; flex-direction: column; height: 100%; }
+
+  /* ---- 顶部栏 ---- */
+  header {
+    display: flex; align-items: center; gap: 10px; padding: 8px 14px;
+    background: var(--panel); border-bottom: 1px solid var(--line); flex-shrink: 0;
+  }
+  header h1 { font-size: 14px; font-weight: 600; color: var(--accent); }
+  /* 版本号：紧跟标题，低调不抢眼 */
+  header h1 #ver {
+    margin-left: 7px; font-size: 10px; font-weight: 500; color: var(--dim);
+    background: var(--panel2); border: 1px solid var(--line);
+    border-radius: 3px; padding: 1px 5px; vertical-align: 1px;
+  }
+  .spacer { flex: 1; }
+  button, select, input[type=number] {
+    background: var(--panel2); color: var(--text); border: 1px solid var(--line);
+    border-radius: 4px; padding: 5px 8px; cursor: pointer; font-size: 12px; font-family: inherit;
+  }
+  input[type=number] { width: 58px; cursor: text; padding: 4px 6px; }
+  input[type=number]:focus { outline: none; border-color: var(--accent); }
+  button:hover { border-color: var(--accent); color: var(--accent); }
+  button:disabled { opacity: .4; cursor: not-allowed; }
+  button.active { background: var(--accent); color: #08120f; border-color: var(--accent); }
+  /* 录制中：红色闪烁提示 */
+  button.recording { background: #ef4444; border-color: #ef4444; color: #fff;
+    animation: recpulse 1s ease-in-out infinite; }
+  @keyframes recpulse { 0%,100% { opacity: 1 } 50% { opacity: .55 } }
+  .status { color: var(--dim); font-size: 12px; }
+
+  /* 状态指示灯：和「TF 变换」按钮同款的色块，只显示不点击 */
+  .lamp {
+    display: inline-block; padding: 3px 9px; border-radius: 4px; font-size: 11px;
+    border: 1px solid var(--line); background: var(--panel2); color: var(--dim);
+    white-space: nowrap; user-select: none; line-height: 1.5;
+  }
+  /* 手自动：自动=绿，手动=蓝 */
+  .lamp.manual-ok   { background: #14331b; border-color: #2e7d32; color: #81c784; }
+  .lamp.manual-on   { background: #0d2440; border-color: #1976d2; color: #64b5f6; }
+  /* 急停：正常=绿，急停=红 */
+  .lamp.estop-ok    { background: #14331b; border-color: #2e7d32; color: #81c784; }
+  .lamp.estop-on    { background: #3b1416; border-color: #ef4444; color: #ff8a80; }
+  .lamp.off { opacity: .45; }
+
+  /* ---- 下拉多选 ---- */
+  .dd { position: relative; display: inline-block; }
+  .dd .ddmenu {
+    position: absolute; left: 0; top: calc(100% + 4px); z-index: 50;
+    background: var(--panel2); border: 1px solid var(--line); border-radius: 5px;
+    min-width: 260px; max-width: 420px; max-height: 60vh; overflow-y: auto;
+    padding: 4px 0; box-shadow: 0 6px 20px rgba(0,0,0,.5); display: none;
+  }
+  .dd.open .ddmenu { display: block; }
+  .ddmenu .grp { padding: 4px 10px 2px; font-size: 10px; color: var(--dim);
+    text-transform: uppercase; letter-spacing: .5px; }
+  .ddmenu .it { display: flex; align-items: center; gap: 7px; padding: 3px 10px;
+    font-size: 12px; cursor: pointer; white-space: nowrap; }
+  .ddmenu .it:hover { background: #2a3039; }
+  /* 未选中：整行淡出；选中：左侧打勾 + 名字加粗 + 底色高亮 */
+  .ddmenu .it { opacity: .45; }
+  .ddmenu .it.on { opacity: 1; background: rgba(0,191,165,.10); }
+  .ddmenu .it .ck { width: 11px; flex-shrink: 0; color: var(--accent);
+    font-size: 11px; font-weight: 700; }
+  .ddmenu .it.on .nm { font-weight: 600; color: #e6edf3; }
+  .ddmenu .it .box { width: 12px; height: 12px; border-radius: 3px; flex-shrink: 0;
+    border: 1px solid #5a6270; background: transparent; }
+  .ddmenu .it.on .box { background: var(--accent); border-color: var(--accent); }
+  /* 取色器：直接点它就能改这个话题的绘制颜色，右键恢复默认 */
+  .ddmenu .it .swatch {
+    width: 14px; height: 14px; padding: 0; flex-shrink: 0; cursor: pointer;
+    border: 1px solid #5a6270; border-radius: 3px; background: transparent;
+  }
+  .ddmenu .it .swatch::-webkit-color-swatch-wrapper { padding: 0; }
+  .ddmenu .it .swatch::-webkit-color-swatch { border: none; border-radius: 2px; }
+  .ddmenu .it .swatch:hover { border-color: var(--accent); }
+  .ddmenu .it .nm { overflow: hidden; text-overflow: ellipsis; }
+  .ddmenu .it .ty { color: var(--dim); font-size: 10px; margin-left: auto; padding-left: 10px; }
+  .ddmenu .sub { padding-left: 22px; font-size: 11px; }
+
+  /* ---- 状态条 ---- */
+  #statusbar {
+    flex-shrink: 0; display: flex; align-items: center; gap: 5px; overflow-x: auto;
+    padding: 3px 8px; background: var(--panel); border-bottom: 1px solid var(--line);
+    min-height: 30px; white-space: nowrap;
+  }
+  #statusbar .hint2 { color: var(--dim); font-size: 11px; }
+  #statusbar .chip {
+    display: inline-flex; align-items: baseline; gap: 5px; flex-shrink: 0;
+    background: var(--panel2); border: 1px solid var(--line); border-radius: 4px;
+    padding: 2px 7px; font-size: 11px;
+  }
+  #statusbar .chip .k { color: var(--dim); font-size: 10px; }
+  /* 定宽 + 等宽数字，数值位数变化时卡片不会左右抖 */
+  #statusbar .chip .v { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums;
+    min-width: 46px; display: inline-block; text-align: right; }
+  #statusbar .chip.warn { border-color: #ff9800; } #statusbar .chip.warn .v { color: #ffb74d; }
+  #statusbar .chip.bad  { border-color: #ef4444; } #statusbar .chip.bad  .v { color: #ff8a80; }
+  #statusbar .chip.ok   { border-color: #2e7d32; } #statusbar .chip.ok   .v { color: #81c784; }
+  /* 手自动：自动=绿，手动=蓝 */
+  #statusbar .chip.info { border-color: #1976d2; } #statusbar .chip.info .v { color: #64b5f6; }
+  /* 该 bag 里没有这个话题的空槽位：留位置但不抢眼 */
+  #statusbar .chip.none { opacity: .45; }
+  #statusbar .chip.none .v { color: var(--dim); font-weight: 400; }
+  #statusbar .chip .x { color: var(--dim); cursor: pointer; padding-left: 2px; font-size: 12px; }
+  #statusbar .chip .x:hover { color: #ef4444; }
+
+  /* ---- 主体 ---- */
+  main { flex: 1; display: flex; min-height: 0; }
+
+  /* 左侧话题面板 */
+
+  /* 中间视图 */
+  #center { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+  #view { flex: 1; display: flex; min-width: 0; background: #14161a; overflow: hidden; }
+  #cvwrap { flex: 1; position: relative; min-width: 0; }
+  #cv { display: block; width: 100%; height: 100%; }
+
+  /* 右侧相机面板：2x2 网格，最多 4 路 */
+  #cams { flex: 0 0 42%; min-width: 180px; display: grid;
+          grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr;
+          gap: 2px; background: var(--line); }
+  #cams.hide { display: none; }
+  .cam { position: relative; background: #0b0d10; overflow: hidden; min-width: 0; min-height: 0; }
+  .cam canvas { display: block; width: 100%; height: 100%; object-fit: contain; background: #0b0d10; }
+  .cam .lbl {
+    position: absolute; left: 4px; top: 3px; font-size: 10px; color: #bcd;
+    background: rgba(0,0,0,.6); padding: 1px 5px; border-radius: 3px; pointer-events: none;
+    max-width: calc(100% - 8px); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .cam .err {
+    position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+    font-size: 11px; color: #7d8794; text-align: center; padding: 6px; line-height: 1.5;
+  }
+  /* 每个格子右上角的旋转按钮 */
+  .cam .rot {
+    position: absolute; right: 3px; top: 3px; z-index: 2;
+    background: rgba(0,0,0,.62); color: #bcd; border: 1px solid #333a44;
+    border-radius: 3px; font-size: 10px; padding: 1px 5px; cursor: pointer;
+    font-family: inherit; line-height: 1.5;
+  }
+  .cam .rot:hover { border-color: var(--accent); color: var(--accent); }
+  .cam .rot.on { border-color: var(--accent); color: var(--accent); }
+  /* 地图 / 相机 之间的竖分隔条 */
+  #vdiv { flex: 0 0 5px; background: var(--panel); cursor: ew-resize;
+          border-left: 1px solid var(--line); border-right: 1px solid var(--line); }
+  #vdiv:hover { background: var(--accent); }
+  #vdiv.hide { display: none; }
+  #hint {
+    position: absolute; inset: 0; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 14px; color: var(--dim);
+  }
+  #hint .big { font-size: 15px; }
+  #hint .sm { font-size: 12px; }
+  #view.dragover { outline: 2px dashed var(--accent); outline-offset: -8px; }
+  #overlay {
+    position: absolute; left: 10px; top: 10px; background: rgba(0,0,0,.55);
+    padding: 6px 10px; border-radius: 4px; font-size: 11px; color: var(--dim); pointer-events: none;
+    white-space: pre; line-height: 1.7;
+  }
+  #overlay b { color: var(--accent); font-weight: 600; }
+
+  /* 底部区域3 = 3-1控制条 + 3-2时间轴(小) + [3-3曲线 | 3-4详情](大，水平并排) */
+  #bottom { flex: 0 0 40%; min-height: 150px; background: var(--panel); border-top: 1px solid var(--line);
+            display: flex; flex-direction: column; }
+  /* 3-1 播放控制条：压缩到最小 */
+  #tlhead { display: flex; align-items: center; gap: 6px; padding: 2px 10px; font-size: 11px;
+            border-bottom: 1px solid var(--line); flex-shrink: 0; min-height: 26px; }
+  #tlhead button, #tlhead select, #tlhead input { padding: 2px 6px; font-size: 11px; }
+  #tlhead .status { font-size: 10px; }
+  /* 3-2 时间轴：只占约 1/3，话题多时自己滚动 */
+  #tlwrap { flex: 0 0 34%; min-height: 64px; display: flex; border-bottom: 1px solid var(--line); }
+  #tllabels { width: 250px; overflow: hidden; border-right: 1px solid var(--line); flex-shrink: 0; }
+  #tllabels .lb { height: 22px; line-height: 22px; padding: 0 12px; font-size: 11px; color: var(--dim);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
+  /* 当前「关注话题」：右下角内容面板显示的就是这一行 */
+  #tllabels .lb.sel { color: #e6edf3; background: rgba(88,166,255,.16); font-weight: 600;
+    box-shadow: inset 2px 0 0 #58a6ff; }
+  #tllabels .lb:hover { background: rgba(255,255,255,.06); }
+  #tlscroll { flex: 1; overflow: auto; position: relative; }
+  #tlcv { display: block; }
+  /* 3-3 曲线 与 3-4 详情 —— 水平并排 */
+  #panes { flex: 1; display: flex; min-height: 0; }
+  #chartwrap { flex: 1 1 58%; min-width: 0; border-right: 1px solid var(--line); padding: 4px 8px 4px;
+               display: flex; flex-direction: column; }
+  #charthead { display: flex; align-items: center; gap: 6px; margin-bottom: 3px; flex-shrink: 0; }
+  #charthead select { flex: 1; min-width: 0; font-size: 11px; padding: 2px 4px; }
+  #chartcv { display: block; width: 100%; flex: 1; min-height: 90px; background: #10131a; border-radius: 3px; }
+  #legend { display: flex; flex-wrap: wrap; gap: 2px 8px; margin-top: 3px; max-height: 34px;
+            overflow-y: auto; flex-shrink: 0; }
+  #legend .lg { display: flex; align-items: center; gap: 4px; cursor: pointer; font-size: 10px;
+    color: var(--dim); white-space: nowrap; }
+  #legend .lg.off { opacity: .35; }
+  #legend .sw { width: 9px; height: 3px; border-radius: 1px; flex-shrink: 0; }
+  /* 图例里的实时数值：等宽数字，位数变化时不抖动 */
+  #legend .lgn { opacity: .8; }
+  #legend .lgv { min-width: 44px; color: #e6edf3; font-weight: 600;
+    font-variant-numeric: tabular-nums; font-family: Consolas, Monaco, monospace; }
+  #json { flex: 0 0 42%; min-width: 0; overflow: auto; padding: 6px 10px; white-space: pre-wrap;
+    word-break: break-all; font-family: Consolas, Monaco, monospace; font-size: 11px; }
+
+  /* 区域2/3 之间的可拖动分隔条 */
+  #hdiv { height: 6px; flex-shrink: 0; background: var(--panel); cursor: ns-resize;
+          border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+  #hdiv:hover { background: var(--accent); }
+  .jk { color: #7fd1ff; } .jv { color: #c3e88d; } .jn { color: #f78c6c; }
+  .jb { color: #c792ea; } .jp { color: var(--dim); }
+
+  ::-webkit-scrollbar { width: 9px; height: 9px; }
+  ::-webkit-scrollbar-thumb { background: #454b55; border-radius: 4px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  /* 墙上时间：主时间用等宽字体，位数变化不抖动 */
+  #clock { display: inline-flex; align-items: baseline; gap: 8px; }
+  #clock .wall {
+    color: #e6edf3; font-variant-numeric: tabular-nums;
+    font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
+    font-size: 12.5px; font-weight: 600;
+  }
+  #clock .rel { color: #8b949e; font-variant-numeric: tabular-nums; font-size: 11px; }
+  .walltime { color: #7ee787; font-size: 11px; font-variant-numeric: tabular-nums; }
+
+  /* 曲线
+</style>
+</head>
+<body>
+<div id="app">
+  <header>
+    <h1>感知导航bag分析工具<span id="ver">v1.5</span></h1>
+    <button id="btnOpen">选择 bag 文件</button>
+    <span class="status" id="stat">未加载</span>
+
+    <!-- 话题多选下拉 -->
+    <div class="dd" id="topicDD">
+      <button id="btnTopics" disabled>话题 ▾</button>
+      <div class="ddmenu" id="topicMenu"></div>
+    </div>
+    <div class="dd" id="statDD">
+      <button id="btnAddStat" disabled title="往状态条里加一个字段">+ 状态</button>
+      <div class="ddmenu" id="statMenu"></div>
+    </div>
+    <div class="dd" id="chartDD">
+      <button id="btnAddChart" disabled title="往曲线图里加一条曲线（可跨话题）">+ 曲线</button>
+      <div class="ddmenu" id="chartMenu"></div>
+    </div>
+
+    <div class="spacer"></div>
+    <div class="dd" id="mfDD">
+      <button id="btnMf" disabled title="地图要素显示开关（虚拟墙 / 禁行区 / 地毯 / 斜坡 / 低门槛 / 标记点）">地图要素 ▾</button>
+      <div class="ddmenu" id="mfMenu"></div>
+    </div>
+    <button id="btnTf" class="active" disabled title="按 /tf 把各话题换算到地图坐标系">TF 变换</button>
+    <button id="btnLegend" class="active" disabled title="地图右上角显示图层颜色图例">图例</button>
+    <button id="btnRec" disabled title="录制区域2（地图+相机）画面并下载">⏺ 录制</button>
+    <select id="recMode" title="录制格式：WebM 画质好体积小；GIF 兼容性最好" style="padding:4px 6px">
+      <option value="webm">WebM</option>
+      <option value="gif">GIF</option>
+    </select>
+    <button id="btnFit" disabled>适应窗口</button>
+  </header>
+
+  <!-- 状态条：显示挑出来的关键字段当前值 -->
+  <div id="statusbar"><span class="hint2">未加载</span></div>
+
+  <main>
+    <section id="center">
+      <div id="view">
+        <div id="cvwrap">
+          <canvas id="cv"></canvas>
+          <div id="hint">
+            <div class="big">把 .bag 文件拖到这里</div>
+            <div class="sm">或者点左上角「选择 bag 文件」· 数据不会上传，全程在本机解析</div>
+          </div>
+        </div>
+        <div id="vdiv" title="拖动调整地图 / 相机的宽度比例"></div>
+        <div id="cams"></div>
+      </div>
+
+      <div id="hdiv" title="拖动调整地图 / 时间轴的高度比例"></div>
+      <div id="bottom">
+        <div id="tlhead">
+          <button id="btnPlay" disabled>▶ 播放</button>
+          <select id="speed" disabled title="播放倍速（可慢放）">
+            <option value="0.1">0.1x</option><option value="0.2">0.2x</option>
+            <option value="0.5">0.5x</option><option value="1" selected>1x</option>
+            <option value="2">2x</option>
+            <option value="5">5x</option><option value="10">10x</option>
+          </select>
+          <span class="status" id="clock">--:--</span>
+          <span class="status walltime" id="wallTime"></span>
+          <span class="status" id="tlZoomInfo" title="滚轮放大时间轴 · Shift+滚轮或右键拖动平移"></span>
+          <button id="btnTlReset" disabled title="时间轴恢复看全程">全览</button>
+          <div class="spacer"></div>
+          <span class="lamp off" id="lampManual" title="手自动（来自 /hardware_state 的 manual 字段）">手自动</span>
+          <span class="lamp off" id="lampEstop" title="急停（来自 /hardware_state 的 e_stop 字段）">急停</span>
+          <span class="status" id="selinfo"></span>
+        </div>
+        <div id="tlwrap">
+          <div id="tllabels"></div>
+          <div id="tlscroll"><canvas id="tlcv"></canvas></div>
+        </div>
+        <div id="panes">
+          <div id="chartwrap">
+            <div id="charthead">
+              <span class="status">曲线</span>
+              <button id="btnClearChart" disabled title="清空所有曲线">清空</button>
+              <button id="btnChReset" disabled title="曲线横轴恢复看全程（也可双击曲线区）">全览</button>
+              <span class="status" id="chartInfo"></span>
+            </div>
+            <canvas id="chartcv"></canvas>
+            <div id="legend"></div>
+          </div>
+          <div id="json">点击时间轴上任意一行（或左边的标签名），这里显示该话题在当前时刻的消息</div>
+        </div>
+      </div>
+    </section>
+  </main>
+</div>
+
+<input type="file" id="fileInput" accept=".bag" hidden>
+<script type="module" src="./app.js"></script>
+</body>
+</html>

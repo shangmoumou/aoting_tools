@@ -1,0 +1,23 @@
+# Local credentials and machine state
+tools/gate_token.txt
+tools/status_pwd.txt
+**/conn_profiles.json
+.env
+.env.*
+*.pem
+*.key
+# Runtime data and generated previews
+__pycache__/
+*.py[cod]
+*.db
+*.db-wal
+*.db-shm
+*.log
+*.lnk
+outputs/
+.workbuddy/
+.bak*
+*.zip
+# Local command-output artifacts
+/Python
+/端口

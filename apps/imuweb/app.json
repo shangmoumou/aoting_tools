@@ -1,0 +1,14 @@
+{
+  "id": "imuweb",
+  "name": "IMU / 里程计对比分析",
+  "ver": "1.4",
+  "icon": "📈",
+  "desc": "角速度、三路 yaw 对比、odom-imu 漂移、帧间增量、话题频率诊断（含丢包识别）、IMU 零漂分析（多次静止采点看零偏稳定性）。支持选时间段分析，可跨话题自由选字段。",
+  "type": "page",
+  "entry": "index.html",
+  "tags": ["纯前端", "离线可用"],
+  "src": "src/",
+  "build": "src/build.py",
+  "verPat": "v(\\d+\\.\\d+)",
+  "srcFiles": ["index.html", "bag.js", "chart.js", "app.js", "build.py"]
+}
